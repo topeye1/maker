@@ -24,7 +24,7 @@ class TradeSwapOrder:
         endpoint = config.api_uri.HTX_Order
         API_URL = config.api_uri.setPostApiUrl(self.api_key, self.secret_key, method, endpoint)
 
-        volume = (amount / c_price) / self.min_digit
+        volume = (amount / float(c_price)) / self.min_digit
         self.order_volume = int(volume)
         str_symbol = utils.convertSymbolName(self.symbol)
         order_price = utils.getRoundDotDigit(price, self.dot_digit)

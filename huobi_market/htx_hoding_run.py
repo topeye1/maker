@@ -122,11 +122,12 @@ class HoldingOrderTradeHTX:
         if self.setting.symbol_price == 0:
             self.setting.symbol_price = connect_redis.getCoinCurrentPrice(self.rdb, 'htx', self.symbol, 'float')
 
-        state, self.hold_order_id, self.tp, self.sl = self.swap_order.onTradingSwapOrder(direction, idx, balance, amount, self.setting.symbol_price, self.leverage, self.bet_limit,
-                                                                                         price, tp_price, sl_price, self.rate_rev, self.rate_liq, self.brokerID, self.coin_num)
-        print(f"self.hold_order_id={self.hold_order_id}, state={state}  tp={self.tp}")
-        if state:
-            self.onTradingScheduler()
+        if float(self.setting.symbol_price) > 0:
+            state, self.hold_order_id, self.tp, self.sl = self.swap_order.onTradingSwapOrder(direction, idx, balance, amount, float(self.setting.symbol_price), self.leverage, self.bet_limit,
+                                                                                             price, tp_price, sl_price, self.rate_rev, self.rate_liq, self.brokerID, self.coin_num)
+            print(f"symbol={self.symbol}, hold_order_id={self.hold_order_id}, state={state}  tp={self.tp}")
+            if state:
+                self.onTradingScheduler()
 
     # Holding 주문 체결 확인
     def checkTradeOrder(self):
