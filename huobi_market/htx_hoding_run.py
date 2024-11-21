@@ -88,7 +88,6 @@ class HoldingOrderTradeHTX:
 
     def run_holding_thread(self, idx, direction, price):
         try:
-            print(f"symbol={self.symbol} - {direction}, price={price}")
             self.swap_order = htx_swap_order.TradeSwapOrder(self.api_key, self.secret_key, self.symbol,
                                                             self.user_num, self.coin_num, self.dot_digit,
                                                             self.min_digit)
@@ -125,9 +124,11 @@ class HoldingOrderTradeHTX:
         if float(self.setting.symbol_price) > 0:
             state, self.hold_order_id, self.tp, self.sl = self.swap_order.onTradingSwapOrder(direction, idx, balance, amount, float(self.setting.symbol_price), self.leverage, self.bet_limit,
                                                                                              price, tp_price, sl_price, self.rate_rev, self.rate_liq, self.brokerID, self.coin_num)
-            print(f"symbol={self.symbol}, hold_order_id={self.hold_order_id}, state={state}  tp={self.tp}")
+            print(f"HOLDING --- symbol={self.symbol}, hold_order_id={self.hold_order_id}, state={state}")
+            """
             if state:
                 self.onTradingScheduler()
+            """
 
     # Holding 주문 체결 확인
     def checkTradeOrder(self):

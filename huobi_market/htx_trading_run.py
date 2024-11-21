@@ -35,6 +35,9 @@ class RunTrading:
         self.param = param
         self.rate_rev = float(param['rate_rev'])
         self.rate_liq = float(param['rate_liq'])
+        # 홀딩 조건 퍼센트
+        self.hold_rate = int(w_param['h1'])
+
         self.rdb = rdb
         self.order_price = price
         self.tradingCls = tradingCls
@@ -226,13 +229,13 @@ class RunTrading:
                     self.setting.position_num += 1
             # 주문이 청산 완료 되었 을 때
             if self.offset == 'close':
-                if status == 4 and self.is_close is False:
-                    self.cancelSubOrder()
                 self.is_close = True
                 # break 상태 나 holding 상태 이면 주문을 넣지 않는다.
                 if self.setting.s_brake or self.setting.l_stop or self.setting.holding_status:
                     return
                 else:
+                    if status == 4:
+                        self.cancelSubOrder()
                     self.setting.setStOrderStatus(self.idx, 'complete', self.direction)
                     # 청산 완료된 스케쥴 끝내기
                     self.shutDownCheckSchedule()
@@ -364,22 +367,18 @@ class RunTrading:
         if self.setting.s_brake or self.setting.l_stop:
             return
         if self.direction == 'buy':
-            # price3 = self.setting.BUY_PRICE[2]
-            price4 = self.setting.BUY_PRICE[3]
-            # 현재 가격이 b4 의 5%보다 더 작으면
-            limit_price = price4 - price4 * (5 / 100)
+            price1 = self.setting.BUY_PRICE[0]
+            # 현재 가격이 홀딩 조건 가격 보다 더 작으면
+            limit_price = price1 - price1 * (self.hold_rate / 100)
             if self.setting.symbol_price <= limit_price:
                 self.setting.holding_status = True
-                order_price = price4 - price4 * (6 / 100)
                 holdingCls = htx_hoding_run.HoldingOrderTradeHTX(self.param, self.w_param, self.rdb)
-                holdingCls.run_holding_thread(4, 'buy', order_price)
+                holdingCls.run_holding_thread(4, 'sell', self.setting.symbol_price)
         elif self.direction == 'sell':
-            # price3 = self.setting.SELL_PRICE[2]
-            price4 = self.setting.SELL_PRICE[3]
-            # 현재 가격이 s4의 5%보다 더 커지면
-            limit_price = price4 + price4 * (5 / 100)
+            price1 = self.setting.SELL_PRICE[0]
+            # 현재 가격이 홀딩 조건 가격 보다 더 커지면
+            limit_price = price1 + price1 * (self.hold_rate / 100)
             if self.setting.symbol_price >= limit_price:
                 self.setting.holding_status = True
-                order_price = price4 + price4 * (6 / 100)
                 holdingCls = htx_hoding_run.HoldingOrderTradeHTX(self.param, self.w_param, self.rdb)
-                holdingCls.run_holding_thread(4, 'sell', order_price)
+                holdingCls.run_holding_thread(4, 'buy', self.setting.symbol_price)

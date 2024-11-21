@@ -32,22 +32,36 @@ class TradeSwapOrder:
         sl = utils.getRoundDotDigit(sl_price, self.dot_digit)
         order_datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
         # 파라미터 설정
-        datas = {
-            "contract_code": f'{str_symbol}',
-            "direction": direction,
-            "offset": "open",
-            "price": order_price,
-            "lever_rate": lever_rate,
-            "volume": self.order_volume,
-            "order_price_type": "limit",
-            "tp_trigger_price": tp,
-            "tp_order_price": tp,
-            "tp_order_price_type": "limit",
-            # "sl_trigger_price": f"{sl}",
-            # "sl_order_price": f"{sl}",
-            # "sl_order_price_type": "limit",
-            "channel_code": f"{brokerID}"
-        }
+        if idx <= 3:
+            # 정상 상태 주문 파라미터
+            datas = {
+                "contract_code": f'{str_symbol}',
+                "direction": direction,
+                "offset": "open",
+                "price": order_price,
+                "lever_rate": lever_rate,
+                "volume": self.order_volume,
+                "order_price_type": "limit",
+                "tp_trigger_price": tp,
+                "tp_order_price": tp,
+                "tp_order_price_type": "limit",
+                # "sl_trigger_price": f"{sl}",
+                # "sl_order_price": f"{sl}",
+                # "sl_order_price_type": "limit",
+                "channel_code": f"{brokerID}"
+            }
+        else:
+            # 홀딩 상태 주문 파라미터
+            datas = {
+                "contract_code": f'{str_symbol}',
+                "direction": direction,
+                "offset": "open",
+                "price": order_price,
+                "lever_rate": lever_rate,
+                "volume": self.order_volume,
+                "order_price_type": "limit",
+                "channel_code": f"{brokerID}"
+            }
 
         body = json.dumps(datas, separators=(',', ':'))
         headers = {
