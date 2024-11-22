@@ -108,19 +108,25 @@ class HoldingOrderTradeHTX:
         if price == 0:
             return
         self.direction = direction
-        amount = self.bet_limit * self.orderCounts[2] + self.bet_limit * self.orderCounts[3]
+        amount = 0
+
         tp_price = 0
         sl_price = 0
         if direction == "sell":
-            tp_price = price - price * (self.rate_rev / 100) * (1 + self.strengths[3]) / 2
-            sl_price = price + price * (self.rate_liq / 100)
+            # tp_price = price - price * (self.rate_rev / 100) * (1 + self.strengths[3]) / 2
+            # sl_price = price + price * (self.rate_liq / 100)
+            for i in range(0, 4):
+                amount += self.setting.BUY_AMOUNT[i]
         elif direction == "buy":
-            tp_price = price + price * (self.rate_rev / 100) * (1 + self.strengths[3]) / 2
-            sl_price = price - price * (self.rate_liq / 100)
+            # tp_price = price + price * (self.rate_rev / 100) * (1 + self.strengths[3]) / 2
+            # sl_price = price - price * (self.rate_liq / 100)
+            for i in range(0, 4):
+                amount += self.setting.SELL_AMOUNT[i]
 
         if self.setting.symbol_price == 0:
             self.setting.symbol_price = connect_redis.getCoinCurrentPrice(self.rdb, 'htx', self.symbol, 'float')
 
+        print(f"HOLDING --- {self.symbol}-{direction},  price={self.setting.symbol_price}, amount={amount}")
         if float(self.setting.symbol_price) > 0:
             state, self.hold_order_id, self.tp, self.sl = self.swap_order.onTradingSwapOrder(direction, idx, balance, amount, float(self.setting.symbol_price), self.leverage, self.bet_limit,
                                                                                              price, tp_price, sl_price, self.rate_rev, self.rate_liq, self.brokerID, self.coin_num)
@@ -134,7 +140,6 @@ class HoldingOrderTradeHTX:
     def checkTradeOrder(self):
         # 주문이 체결 되였 는지, 청산이 완료 되였 는지 체크
         status = self.order_info.onCheckOrderInfo(self.hold_order_id, self.user_num)
-        print(f"user_num={self.user_num}, status={status}")
         if status == 4 or status == 6:
             # 주문 청산 완료 되었 는지 체크 하기
             side = 'sell'
@@ -153,7 +158,6 @@ class HoldingOrderTradeHTX:
 
             # 주문이 청산 완료 되었 을 때
             if offset == 'close':
-                print(f"offset={offset}")
                 self.setting.holding_status = False
                 connect_db.setOrderClose(self.user_num, self.coin_num, 'htx')
                 # 청산 완료된 스케쥴 끝내기

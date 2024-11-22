@@ -434,7 +434,7 @@ class OrderTradeHTX:
                 self.live_run = htx_trading_run.RunTrading(self.api_key, self.secret_key, self.symbol, idx, direction,
                                                            self.param, self.w_param, self.rdb, price, order_id,
                                                            self.setting, self, self.user_num)
-                self.live_run.checkOrderExecution(tp, sl)
+                self.live_run.checkOrderExecution(tp, sl, amount)
                 self.live_instances.append(self.live_run)
             else:
                 self.run_thread(idx, direction)

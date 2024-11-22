@@ -22,8 +22,10 @@ class HuobiSetting:
         self.min_price = 0
         self.symbol_price = 0
         self.holding_status = False
+        self.SELL_AMOUNT = [0, 0, 0, 0]
+        self.BUY_AMOUNT = [0, 0, 0, 0]
 
-    def setStOrderStatus(self, idx, status, direction, price=0, tp=0, sl=0, order_id=''):
+    def setStOrderStatus(self, idx, status, direction, price=0, tp=0, sl=0, amount=0, order_id=''):
         if status == 'create':
             if direction == 'sell':
                 self.SELL_PRICE[idx] = price
@@ -32,6 +34,7 @@ class HuobiSetting:
                 self.SELL_ID[idx] = order_id
                 self.SELL_STATUS[idx] = 3
                 self.SELL_RUN[idx] = 1
+                self.SELL_AMOUNT[idx] = amount
             else:
                 self.BUY_PRICE[idx] = price
                 self.BUY_TP[idx] = tp
@@ -39,6 +42,7 @@ class HuobiSetting:
                 self.BUY_ID[idx] = order_id
                 self.BUY_STATUS[idx] = 3
                 self.BUY_RUN[idx] = 1
+                self.BUY_AMOUNT[idx] = amount
         elif status == 'complete':
             if direction == 'sell':
                 self.SELL_PRICE[idx] = 0
@@ -48,6 +52,7 @@ class HuobiSetting:
                 self.SELL_POS_ID[idx] = ''
                 self.SELL_STATUS[idx] = 0
                 self.SELL_RUN[idx] = 0
+                self.SELL_AMOUNT[idx] = 0
             else:
                 self.BUY_PRICE[idx] = 0
                 self.BUY_TP[idx] = 0
@@ -56,6 +61,7 @@ class HuobiSetting:
                 self.BUY_POS_ID[idx] = ''
                 self.BUY_STATUS[idx] = 0
                 self.BUY_RUN[idx] = 0
+                self.BUY_AMOUNT[idx] = 0
 
     def initParams(self):
         self.SELL_PRICE = [0, 0, 0, 0]
@@ -73,6 +79,8 @@ class HuobiSetting:
         self.BUY_RUN = [0, 0, 0, 0]
         self.BUY_STATUS = [0, 0, 0, 0]
         self.position_num = 0
+        self.SELL_AMOUNT = [0, 0, 0, 0]
+        self.BUY_AMOUNT = [0, 0, 0, 0]
 
     # 오픈 된 주문의 주문 가격(포지션 될수 있는 가격) 얻기
     def getOrderPrice(self, idx, direction):

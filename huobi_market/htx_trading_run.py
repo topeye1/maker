@@ -177,8 +177,8 @@ class RunTrading:
             else:
                 self.is_buy = 0
 
-    def checkOrderExecution(self, tp, sl):
-        self.setting.setStOrderStatus(self.idx, 'create', self.direction, self.order_price, tp, sl, self.order_id)
+    def checkOrderExecution(self, tp, sl, amount):
+        self.setting.setStOrderStatus(self.idx, 'create', self.direction, self.order_price, tp, sl, amount, self.order_id)
         self.order_info = htx_order_info.HuobiOrderInfo(self.api_key, self.secret_key, self.symbol)
         self.close_history = htx_order_history.HuobiOrderHistory(self.api_key, self.secret_key, self.symbol)
         self.checkTradeOrder()
