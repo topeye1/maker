@@ -130,9 +130,10 @@ class TradeSwapOrder:
                         connect_db.setOrderHoldingStatus(self.user_num, coin_num, 'htx', 1)
                     return True, order_id_str, tp, sl
                 else:
+                    print(f"Error response : ' {self.user_num} {self.symbol} : {response.text}")
                     return False, '', 0, 0
             else:
-                print(f"Failed to url '/linear-swap-api/v1/swap_order' {self.user_num} {self.symbol} : {response.text}")
+                print(f"Failed to url '/linear-swap-api/v1/swap_order : ' {self.user_num} {self.symbol} : {response.text}")
                 return False, '', 0, 0
         except Exception as e:
             print(f"HTX onTradingSwapOrder error : {e}")

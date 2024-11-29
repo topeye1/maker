@@ -241,6 +241,9 @@ class OrderTradeHTX:
             self.setting.is_close = True
             self.setting.max_price = 0
             self.setting.min_price = 0
+            if self.setting.holding_status:
+                connect_db.setOrderClose(self.user_num, self.coin_num, 'htx')
+                self.setting.holding_status = False
 
             self.onCloseSymbolOrder()
             # 주문의 실행 상태 0 (stop 상태)
@@ -353,7 +356,7 @@ class OrderTradeHTX:
         time.sleep(self.schedule_period)
 
     def onFirstOrder(self):
-        if self.setting.l_stop or self.setting.s_brake:
+        if self.setting.l_stop or self.setting.s_brake or self.setting.holding_status:
             return
         # sell, buy 방향의 모든 주문이 청산 완료 이면 새 주문 넣기
         sell_idx = self.setting.checkNextIndex(0, 'sell')

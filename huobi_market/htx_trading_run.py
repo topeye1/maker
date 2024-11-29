@@ -127,7 +127,7 @@ class RunTrading:
                     self.cancel_time = 0
 
                 # Holding 상태 체크
-                if self.idx == 3 and self.setting.holding_status is False:
+                if self.setting.holding_status is False:
                     work3 = executor.submit(self.checkHoldingStatus)
                     works.append(work3)
 
@@ -230,18 +230,14 @@ class RunTrading:
             # 주문이 청산 완료 되었 을 때
             if self.offset == 'close':
                 self.is_close = True
-                # break 상태 나 holding 상태 이면 주문을 넣지 않는다.
-                if self.setting.s_brake or self.setting.l_stop or self.setting.holding_status:
-                    return
-                else:
-                    if status == 4:
-                        self.cancelSubOrder()
-                    self.setting.setStOrderStatus(self.idx, 'complete', self.direction)
-                    # 청산 완료된 스케쥴 끝내기
-                    self.shutDownCheckSchedule()
-                    self.del_run()
-                    # 재 주문 넣기
-                    self.setReOrder()
+                if status == 4:
+                    self.cancelSubOrder()
+                self.setting.setStOrderStatus(self.idx, 'complete', self.direction)
+                # 청산 완료된 스케쥴 끝내기
+                self.shutDownCheckSchedule()
+                self.del_run()
+                # 재 주문 넣기
+                self.setReOrder()
             # 다음 주문 넣기
             if self.is_next is False:
                 self.setNextOrder()
@@ -364,21 +360,26 @@ class RunTrading:
             self.del_run()
 
     def checkHoldingStatus(self):
-        if self.setting.s_brake or self.setting.l_stop:
-            return
+        print(f"Holding - current_price={self.setting.symbol_price}")
         if self.direction == 'buy':
-            price1 = self.setting.BUY_PRICE[0]
+            price1 = utils.getRoundDotDigit(float(self.setting.BUY_PRICE[0]), 6)
             # 현재 가격이 홀딩 조건 가격 보다 더 작으면
-            limit_price = price1 - price1 * (self.hold_rate / 100)
-            if self.setting.symbol_price <= limit_price:
+            limit_price = utils.getRoundDotDigit(float(price1 - price1 * (self.hold_rate / 100)), 6)
+            print(f"    symbol={self.symbol}-buy, limit_price={limit_price}")
+            if self.setting.symbol_price <= limit_price and price1 > 0:
                 self.setting.holding_status = True
-                holdingCls = htx_hoding_run.HoldingOrderTradeHTX(self.param, self.w_param, self.rdb)
-                holdingCls.run_holding_thread(4, 'sell', self.setting.symbol_price)
+                hold_price = utils.getRoundDotDigit(float(self.setting.symbol_price - self.setting.symbol_price * (3 / 100)), 6)
+                holdingCls = htx_hoding_run.HoldingOrderTradeHTX(self.param, self.w_param, self.rdb, self.setting)
+                print(f"    hold_price={hold_price}")
+                holdingCls.run_holding_thread(4, 'sell', hold_price)
         elif self.direction == 'sell':
-            price1 = self.setting.SELL_PRICE[0]
+            price1 = utils.getRoundDotDigit(float(self.setting.SELL_PRICE[0]), 6)
             # 현재 가격이 홀딩 조건 가격 보다 더 커지면
-            limit_price = price1 + price1 * (self.hold_rate / 100)
-            if self.setting.symbol_price >= limit_price:
+            limit_price = utils.getRoundDotDigit(float(price1 + price1 * (self.hold_rate / 100)), 6)
+            print(f"    symbol={self.symbol}-sell, limit_price={limit_price}")
+            if self.setting.symbol_price >= limit_price and price1 > 0:
                 self.setting.holding_status = True
-                holdingCls = htx_hoding_run.HoldingOrderTradeHTX(self.param, self.w_param, self.rdb)
-                holdingCls.run_holding_thread(4, 'buy', self.setting.symbol_price)
+                hold_price = utils.getRoundDotDigit(float(self.setting.symbol_price + self.setting.symbol_price * (3 / 100)), 6)
+                holdingCls = htx_hoding_run.HoldingOrderTradeHTX(self.param, self.w_param, self.rdb, self.setting)
+                print(f"    hold_price={hold_price}")
+                holdingCls.run_holding_thread(4, 'buy', hold_price)
