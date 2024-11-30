@@ -39,8 +39,8 @@ def getUnSaveTradeIds(user_num, market):
     return maria_db.getUnSaveTradeIds(user_num, market)
 
 
-def setUpdateOrder(data, types, where):
-    return maria_db.updateTradeOrder(data, types, where)
+def setUpdateOrder(data, types, where, user_num=0, symbol='', market='htx', make_price=0, profit_money=0, update_time=''):
+    return maria_db.updateTradeOrder(data, types, where, user_num, symbol, market, make_price, profit_money, update_time)
 
 
 """

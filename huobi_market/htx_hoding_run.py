@@ -115,20 +115,17 @@ class HoldingOrderTradeHTX:
         if direction == "sell":
             # tp_price = price - price * (self.rate_rev / 100) * (1 + self.strengths[3]) / 2
             # sl_price = price + price * (self.rate_liq / 100)
-            print(f"HOLDING sell --- buy amount -  {self.setting.BUY_AMOUNT}")
             for i in range(0, 4):
                 amount += self.setting.BUY_AMOUNT[i]
         elif direction == "buy":
             # tp_price = price + price * (self.rate_rev / 100) * (1 + self.strengths[3]) / 2
             # sl_price = price - price * (self.rate_liq / 100)
-            print(f"HOLDING buy --- sell amount -  {self.setting.SELL_AMOUNT}")
             for i in range(0, 4):
                 amount += self.setting.SELL_AMOUNT[i]
 
         if self.setting.symbol_price == 0:
             self.setting.symbol_price = connect_redis.getCoinCurrentPrice(self.rdb, 'htx', self.symbol, 'float')
 
-        print(f"HOLDING --- {self.symbol}-{direction},  price={price}, amount={amount}")
         if float(self.setting.symbol_price) > 0:
             state, self.hold_order_id, self.tp, self.sl = self.swap_order.onTradingSwapOrder(direction, idx, balance, amount, float(self.setting.symbol_price), self.leverage, self.bet_limit,
                                                                                              price, tp_price, sl_price, self.rate_rev, self.rate_liq, self.brokerID, self.coin_num)

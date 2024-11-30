@@ -60,6 +60,9 @@ class HuobiOrderHistory:
                     update_time = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
                     symbol = data['symbol']
 
+                    s_times = update_time.split(':')
+                    split_time = s_times[0]
+
                     is_matching = False
                     delta_tp = abs(float(tp) - float(price))
                     delta_sl = abs(float(sl) - float(price))
@@ -107,7 +110,7 @@ class HuobiOrderHistory:
                                 'make_date': 'str'
                             }
                             where = f"order_num='{order_id}' AND user_num={user_num} AND symbol LIKE'{symbol}%' AND make_date=''"
-                            res = connect_db.setUpdateOrder(order_data, type_data, where)
+                            res = connect_db.setUpdateOrder(order_data, type_data, where, user_num, symbol, 'htx', price, profit, split_time)
                             if res > 0:
                                 _offset = 'close'
                                 break
@@ -163,6 +166,9 @@ class HuobiOrderHistory:
                     update_time = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
                     symbol = data['symbol']
 
+                    s_times = update_time.split(':')
+                    split_time = s_times[0]
+
                     is_matching = False
 
                     if str(close_order_id) == str(order_id):
@@ -188,7 +194,7 @@ class HuobiOrderHistory:
                                 'make_date': 'str'
                             }
                             where = f"tp_id='{close_order_id}' AND user_num={user_num} AND symbol LIKE'{symbol}%' AND make_date=''"
-                            res = connect_db.setUpdateOrder(order_data, type_data, where)
+                            res = connect_db.setUpdateOrder(order_data, type_data, where, user_num, symbol, 'htx', price, profit, split_time)
                             if res > 0:
                                 _offset = 'close'
                                 break
@@ -242,6 +248,9 @@ class HuobiOrderHistory:
                     update_time = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
                     symbol = data['symbol']
 
+                    s_times = update_time.split(':')
+                    split_time = s_times[0]
+
                     order_data = {
                         'tp_id': f"{order_id}",
                         'sl_id': f"{order_id}",
@@ -263,7 +272,7 @@ class HuobiOrderHistory:
                         'make_date': 'str'
                     }
                     where = f"tp_id='{close_order_id}' AND user_num={user_num} AND symbol LIKE'{symbol}%' AND make_date=''"
-                    res = connect_db.setUpdateOrder(order_data, type_data, where)
+                    res = connect_db.setUpdateOrder(order_data, type_data, where, user_num, symbol, 'htx', price, profit, split_time)
                     if res > 0:
                         _offset = 'close'
                 return _offset

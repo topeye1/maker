@@ -360,26 +360,21 @@ class RunTrading:
             self.del_run()
 
     def checkHoldingStatus(self):
-        print(f"Holding - current_price={self.setting.symbol_price}")
         if self.direction == 'buy':
             price1 = utils.getRoundDotDigit(float(self.setting.BUY_PRICE[0]), 6)
             # 현재 가격이 홀딩 조건 가격 보다 더 작으면
             limit_price = utils.getRoundDotDigit(float(price1 - price1 * (self.hold_rate / 100)), 6)
-            print(f"    symbol={self.symbol}-buy, limit_price={limit_price}")
             if self.setting.symbol_price <= limit_price and price1 > 0:
                 self.setting.holding_status = True
                 hold_price = utils.getRoundDotDigit(float(self.setting.symbol_price - self.setting.symbol_price * (3 / 100)), 6)
                 holdingCls = htx_hoding_run.HoldingOrderTradeHTX(self.param, self.w_param, self.rdb, self.setting)
-                print(f"    hold_price={hold_price}")
                 holdingCls.run_holding_thread(4, 'sell', hold_price)
         elif self.direction == 'sell':
             price1 = utils.getRoundDotDigit(float(self.setting.SELL_PRICE[0]), 6)
             # 현재 가격이 홀딩 조건 가격 보다 더 커지면
             limit_price = utils.getRoundDotDigit(float(price1 + price1 * (self.hold_rate / 100)), 6)
-            print(f"    symbol={self.symbol}-sell, limit_price={limit_price}")
             if self.setting.symbol_price >= limit_price and price1 > 0:
                 self.setting.holding_status = True
                 hold_price = utils.getRoundDotDigit(float(self.setting.symbol_price + self.setting.symbol_price * (3 / 100)), 6)
                 holdingCls = htx_hoding_run.HoldingOrderTradeHTX(self.param, self.w_param, self.rdb, self.setting)
-                print(f"    hold_price={hold_price}")
                 holdingCls.run_holding_thread(4, 'buy', hold_price)
