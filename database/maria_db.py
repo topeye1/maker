@@ -214,7 +214,7 @@ class MariaDB:
             # 만일 한 심볼에서 비슷한 시간에 가격과 이윤이 동일한 것이 존재 하면 OK로 처리
             if user_num > 0 and make_price > 0 and profit_money > 0 and symbol != '' and update_time != '':
                 query = f"SELECT order_num FROM tbl_trade_order "
-                query += f" WHERE user_num={user_num} AND market='{market}' AND symbol='{symbol}' AND make_price={make_price} AND profit_money={profit_money} AND make_date LIKE'{update_time}%' "
+                query += f" WHERE user_num={user_num} AND market='{market}' AND symbol LIKE '{symbol}%' AND make_price={make_price} AND profit_money={profit_money} AND make_date LIKE'{update_time}%' "
                 query += f" ORDER BY order_date DESC"
                 rows = self.select_sql(query=query)
                 if rows is not None and len(rows) > 1:
