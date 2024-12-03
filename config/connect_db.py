@@ -53,6 +53,10 @@ def delCancelOrder(user_num, order_id):
     maria_db.deleteTradeOrder(user_num, order_id)
 
 
+def delCancelPosition(symbol, user_num, market):
+    maria_db.deletePosition(symbol, user_num, market)
+
+
 def delAllCancelOrder(symbol, user_num, market):
     maria_db.delAllCancelOrder(symbol, user_num, market)
 

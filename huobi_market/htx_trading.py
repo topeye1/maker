@@ -248,6 +248,8 @@ class OrderTradeHTX:
             self.onCloseSymbolOrder()
             # 주문의 실행 상태 0 (stop 상태)
             connect_db.setCloseOrderStatus(self.symbol, self.user_num, 'htx')
+            # 처리 안된 포지션 삭제 하기
+            connect_db.delCancelPosition(self.symbol, self.user_num, 'htx')
 
             i = 0
             for stop_htx in utils.stop_htx_info:

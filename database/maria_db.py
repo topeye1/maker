@@ -132,7 +132,7 @@ class MariaDB:
                     result.append(row[0])
             return result
         except Exception as e:
-            self.error("getLiveCoinStatus " + str(e))
+            self.error("getTradeOrderIds " + str(e))
             return 0
 
     def getUnSaveTradeIds(self, user_num, market):
@@ -153,7 +153,7 @@ class MariaDB:
                     result.append(params)
             return result
         except Exception as e:
-            self.error("getLiveCoinStatus " + str(e))
+            self.error("getUnSaveTradeIds " + str(e))
             return 0
 
     def selMarketAmount(self, user_num, market, toDay):
@@ -258,7 +258,15 @@ class MariaDB:
             self.delete_sql(sql)
 
         except Exception as e:
-            self.error("setUsersAmount " + str(e))
+            self.error("deleteTradeOrder " + str(e))
+
+    def deletePosition(self, symbol, user_num, market):
+        try:
+            sql = f"DELETE FROM tbl_trade_order WHERE symbol='{symbol}' AND user_num={user_num} AND market='{market}' AND make_date=''"
+            self.delete_sql(sql)
+
+        except Exception as e:
+            self.error("deletePosition " + str(e))
 
     def updateOrderLiveStatus(self, symbol, user_num, market, status):
         try:
@@ -298,7 +306,7 @@ class MariaDB:
             res = self.update_sql(sql)
             return res
         except Exception as e:
-            self.error("updateBreakStatus " + str(e))
+            self.error("updateReleaseBreakStatus " + str(e))
             return 0
 
     def updateOrderHoldingStatus(self, user_num, coin_num, market, status):
@@ -326,7 +334,7 @@ class MariaDB:
             rows = self.select_sql(query=query)
             return len(rows)
         except Exception as e:
-            self.error("selMarketAmount " + str(e))
+            self.error("selectDoubleOrder " + str(e))
             return 0
 
     def select_sql(self, query):
