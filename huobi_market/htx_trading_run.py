@@ -128,8 +128,9 @@ class RunTrading:
 
                 # Holding 상태 체크
                 if self.setting.holding_status is False:
-                    work3 = executor.submit(self.checkHoldingStatus)
-                    works.append(work3)
+                    if self.setting.s_brake or self.setting.l_stop:
+                        work3 = executor.submit(self.checkHoldingStatus)
+                        works.append(work3)
 
                 concurrent.futures.wait(works)
                 executor.shutdown()
