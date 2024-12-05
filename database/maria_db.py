@@ -156,6 +156,22 @@ class MariaDB:
             self.error("getUnSaveTradeIds " + str(e))
             return 0
 
+    def getLiquidationClosedOrders(self, symbol, user_num, market, price, profit):
+        try:
+            today = utils.getTimezoneToDay()
+            query = f"SELECT count(user_num) as cnt FROM tbl_trade_order WHERE "
+            query += f"symbol='{symbol}' AND user_num={user_num} AND market='{market}' "
+            query += f"AND make_price='{price}' AND profit_money='{profit}' "
+            query += f"AND SUBSTRING(make_date, 1, 10)='{today}' "
+            rows = self.select_sql(query=query)
+            if rows is not None:
+                return rows[0][0]
+            else:
+                return 0
+        except Exception as e:
+            self.error("closePositionOrderStatus " + str(e))
+            return 0
+
     def selMarketAmount(self, user_num, market, toDay):
         try:
             query = f"SELECT user_num "

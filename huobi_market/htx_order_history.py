@@ -101,6 +101,16 @@ class HuobiOrderHistory:
                                 'fee_money': fee,
                                 'make_date': update_time
                             }
+                            liq_cnt = connect_db.getLiquidationClosedOrders(symbol, user_num, 'htx', price, profit)
+                            if liq_cnt > 0:
+                                order_data = {
+                                    'order_position': 2,
+                                    'make_price': price,
+                                    'make_money': "OK",
+                                    'profit_money': "OK",
+                                    'fee_money': "OK",
+                                    'make_date': update_time
+                                }
                             type_data = {
                                 'order_position': 'int',
                                 'make_price': 'str',
@@ -185,6 +195,16 @@ class HuobiOrderHistory:
                                 'fee_money': fee,
                                 'make_date': update_time
                             }
+                            liq_cnt = connect_db.getLiquidationClosedOrders(symbol, user_num, 'htx', price, profit)
+                            if liq_cnt > 0:
+                                order_data = {
+                                    'order_position': 2,
+                                    'make_price': price,
+                                    'make_money': "OK",
+                                    'profit_money': "OK",
+                                    'fee_money': "OK",
+                                    'make_date': update_time
+                                }
                             type_data = {
                                 'order_position': 'int',
                                 'make_price': 'str',
@@ -261,6 +281,18 @@ class HuobiOrderHistory:
                         'fee_money': fee,
                         'make_date': update_time
                     }
+                    liq_cnt = connect_db.getLiquidationClosedOrders(symbol, user_num, 'htx', price, profit)
+                    if liq_cnt > 0:
+                        order_data = {
+                            'tp_id': f"{order_id}",
+                            'sl_id': f"{order_id}",
+                            'order_position': 2,
+                            'make_price': price,
+                            'make_money': "OK",
+                            'profit_money': "OK",
+                            'fee_money': "OK",
+                            'make_date': update_time
+                        }
                     type_data = {
                         'tp_id': 'str',
                         'sl_id': 'str',
