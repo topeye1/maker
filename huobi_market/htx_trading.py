@@ -447,7 +447,7 @@ class OrderTradeHTX:
     # S4가 주문 체결 된 상태 에서 B1이 존재 하지 않을 경우
     # B4가 주문 체결 된 상태 에서 S1존재 하지 않을 경우
     def restartFirstOrder(self):
-        if self.setting.l_stop or self.setting.s_brake:
+        if self.setting.l_stop or self.setting.s_brake or self.setting.holding_status:
             return
         status_buy_0 = self.setting.getOrderStatus(0, 'buy')
         status_sell_2 = self.setting.getOrderStatus(2, 'sell')
