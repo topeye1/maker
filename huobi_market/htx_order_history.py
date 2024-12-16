@@ -72,6 +72,7 @@ class HuobiOrderHistory:
                         is_matching = True
                     elif str(tp) == str(price) or str(sl) == str(price):
                         is_matching = True
+                    """
                     if index == 0 and order_source == 'risk':
                         if side == 'sell':
                             if price >= tp or price <= sl:
@@ -79,7 +80,9 @@ class HuobiOrderHistory:
                         else:
                             if price >= sl or price <= tp:
                                 is_matching = True
+                    """
                     if is_matching is True:
+                        print(f"---{update_time} --- user_num={user_num}, symbol={symbol}, is_matching={is_matching}, tp={tp}, price={price}, order_source={order_source}, index={index}")
                         if abs(float(profit)) < 0.000001:
                             close_order_id = str(data['order_id'])
                             order_data = {
