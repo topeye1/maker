@@ -60,9 +60,6 @@ class HuobiOrderHistory:
                     update_time = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
                     symbol = data['symbol']
 
-                    s_times = update_time.split(':')
-                    split_time = s_times[0]
-
                     is_matching = False
                     delta_tp = abs(float(tp) - float(price))
                     delta_sl = abs(float(sl) - float(price))
@@ -72,7 +69,7 @@ class HuobiOrderHistory:
                         is_matching = True
                     elif str(tp) == str(price) or str(sl) == str(price):
                         is_matching = True
-                    """
+
                     if index == 0 and order_source == 'risk':
                         if side == 'sell':
                             if price >= tp or price <= sl:
@@ -80,9 +77,8 @@ class HuobiOrderHistory:
                         else:
                             if price >= sl or price <= tp:
                                 is_matching = True
-                    """
+
                     if is_matching is True:
-                        print(f"---{update_time} --- user_num={user_num}, symbol={symbol}, is_matching={is_matching}, tp={tp}, price={price}, order_source={order_source}, index={index}")
                         if abs(float(profit)) < 0.000001:
                             close_order_id = str(data['order_id'])
                             order_data = {
@@ -96,14 +92,6 @@ class HuobiOrderHistory:
                             where = f"order_num='{order_id}' AND user_num={user_num} AND symbol LIKE'{symbol}%' AND make_date=''"
                             connect_db.setUpdateOrder(order_data, type_data, where)
                         else:
-                            order_data = {
-                                'order_position': 2,
-                                'make_price': price,
-                                'make_money': make_money,
-                                'profit_money': profit,
-                                'fee_money': fee,
-                                'make_date': update_time
-                            }
                             liq_cnt = connect_db.getLiquidationClosedOrders(symbol, user_num, 'htx', price, profit)
                             if liq_cnt > 0:
                                 order_data = {
@@ -112,6 +100,15 @@ class HuobiOrderHistory:
                                     'make_money': "OK",
                                     'profit_money': "OK",
                                     'fee_money': "OK",
+                                    'make_date': update_time
+                                }
+                            else:
+                                order_data = {
+                                    'order_position': 2,
+                                    'make_price': price,
+                                    'make_money': make_money,
+                                    'profit_money': profit,
+                                    'fee_money': fee,
                                     'make_date': update_time
                                 }
                             type_data = {
@@ -123,7 +120,7 @@ class HuobiOrderHistory:
                                 'make_date': 'str'
                             }
                             where = f"order_num='{order_id}' AND user_num={user_num} AND symbol LIKE'{symbol}%' AND make_date=''"
-                            res = connect_db.setUpdateOrder(order_data, type_data, where, user_num, symbol, 'htx', price, profit, split_time)
+                            res = connect_db.setUpdateOrder(order_data, type_data, where)
                             if res > 0:
                                 _offset = 'close'
                                 break
@@ -179,9 +176,6 @@ class HuobiOrderHistory:
                     update_time = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
                     symbol = data['symbol']
 
-                    s_times = update_time.split(':')
-                    split_time = s_times[0]
-
                     is_matching = False
 
                     if str(close_order_id) == str(order_id):
@@ -198,16 +192,6 @@ class HuobiOrderHistory:
                                 'fee_money': fee,
                                 'make_date': update_time
                             }
-                            liq_cnt = connect_db.getLiquidationClosedOrders(symbol, user_num, 'htx', price, profit)
-                            if liq_cnt > 0:
-                                order_data = {
-                                    'order_position': 2,
-                                    'make_price': price,
-                                    'make_money': "OK",
-                                    'profit_money': "OK",
-                                    'fee_money': "OK",
-                                    'make_date': update_time
-                                }
                             type_data = {
                                 'order_position': 'int',
                                 'make_price': 'str',
@@ -217,7 +201,7 @@ class HuobiOrderHistory:
                                 'make_date': 'str'
                             }
                             where = f"tp_id='{close_order_id}' AND user_num={user_num} AND symbol LIKE'{symbol}%' AND make_date=''"
-                            res = connect_db.setUpdateOrder(order_data, type_data, where, user_num, symbol, 'htx', price, profit, split_time)
+                            res = connect_db.setUpdateOrder(order_data, type_data, where)
                             if res > 0:
                                 _offset = 'close'
                                 break
@@ -271,20 +255,9 @@ class HuobiOrderHistory:
                     update_time = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
                     symbol = data['symbol']
 
-                    s_times = update_time.split(':')
-                    split_time = s_times[0]
-
-                    order_data = {
-                        'tp_id': f"{order_id}",
-                        'sl_id': f"{order_id}",
-                        'order_position': 2,
-                        'make_price': price,
-                        'make_money': make_money,
-                        'profit_money': profit,
-                        'fee_money': fee,
-                        'make_date': update_time
-                    }
                     liq_cnt = connect_db.getLiquidationClosedOrders(symbol, user_num, 'htx', price, profit)
+
+
                     if liq_cnt > 0:
                         order_data = {
                             'tp_id': f"{order_id}",
@@ -294,6 +267,17 @@ class HuobiOrderHistory:
                             'make_money': "OK",
                             'profit_money': "OK",
                             'fee_money': "OK",
+                            'make_date': update_time
+                        }
+                    else:
+                        order_data = {
+                            'tp_id': f"{order_id}",
+                            'sl_id': f"{order_id}",
+                            'order_position': 2,
+                            'make_price': price,
+                            'make_money': make_money,
+                            'profit_money': profit,
+                            'fee_money': fee,
                             'make_date': update_time
                         }
                     type_data = {
@@ -307,7 +291,7 @@ class HuobiOrderHistory:
                         'make_date': 'str'
                     }
                     where = f"tp_id='{close_order_id}' AND user_num={user_num} AND symbol LIKE'{symbol}%' AND make_date=''"
-                    res = connect_db.setUpdateOrder(order_data, type_data, where, user_num, symbol, 'htx', price, profit, split_time)
+                    res = connect_db.setUpdateOrder(order_data, type_data, where)
                     if res > 0:
                         _offset = 'close'
                 return _offset

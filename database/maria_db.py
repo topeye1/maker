@@ -76,7 +76,7 @@ class MariaDB:
             query = f"SELECT A.cid AS cid, A.user_num AS user_num, A.coin_num AS coin_num, B.coin_name AS coin_name, "
             query += f"A.market AS market, A.bet_limit AS bet_limit, A.rate_rev AS rate_rev, A.leverage AS leverage, "
             query += f"A.rate_liq AS rate_liq, C.api_key AS api_key, C.secret_key AS secret_key, "
-            query += f"B.digit AS dot_digit, B.min_volume AS min_digit "
+            query += f"B.digit AS dot_digit, B.min_volume AS min_digit, A.check_time AS auto_ctime "
             query += f"FROM tbl_live_coins AS A "
             query += f"LEFT JOIN fix_coins AS B ON B.coin_id = A.coin_num "
             query += f"LEFT JOIN tbl_api_key AS C ON C.kid = A.kid "
@@ -98,7 +98,8 @@ class MariaDB:
                         'api_key': row[9],
                         'secret_key': row[10],
                         'dot_digit': row[11],
-                        'min_digit': row[12]
+                        'min_digit': row[12],
+                        'auto_ctime': row[13]
                     }
 
                     result.append(watcher_params)
@@ -120,19 +121,6 @@ class MariaDB:
             return 0
         except Exception as e:
             self.error("getLiveCoinStatus " + str(e))
-            return 0
-
-    def getTradeOrderIds(self, order_id):
-        try:
-            query = f"SELECT order_num FROM tbl_trade_order WHERE tp_id='{order_id}' OR sl_id='{order_id}' ORDER BY order_date DESC"
-            rows = self.select_sql(query=query)
-            result = []
-            if rows is not None:
-                for row in rows:
-                    result.append(row[0])
-            return result
-        except Exception as e:
-            self.error("getTradeOrderIds " + str(e))
             return 0
 
     def getUnSaveTradeIds(self, user_num, market):
@@ -158,14 +146,17 @@ class MariaDB:
 
     def getLiquidationClosedOrders(self, symbol, user_num, market, price, profit):
         try:
-            today = utils.getTimezoneToDay()
             query = f"SELECT count(user_num) as cnt FROM tbl_trade_order WHERE "
             query += f"symbol='{symbol}' AND user_num={user_num} AND market='{market}' "
             query += f"AND make_price='{price}' AND profit_money='{profit}' "
-            query += f"AND SUBSTRING(make_date, 1, 10)='{today}' "
+            print(f"   query={query}")
             rows = self.select_sql(query=query)
+            print(f"   rows={rows}")
             if rows is not None:
-                return rows[0][0]
+                cnt = 0
+                for row in rows:
+                    cnt = row[0]
+                return cnt
             else:
                 return 0
         except Exception as e:
@@ -213,7 +204,7 @@ class MariaDB:
         except Exception as e:
             self.error("setTradeOrder " + str(e))
 
-    def updateTradeOrder(self, data, types, where, user_num=0, symbol='', market='htx', make_price=0, profit_money=0, update_time=''):
+    def updateTradeOrder(self, data, types, where):
         try:
             fd = ''
             for key, value in data.items():
@@ -227,21 +218,6 @@ class MariaDB:
             sql = f"UPDATE tbl_trade_order SET {fields} WHERE {where}"
             res = self.update_sql(sql)
 
-            # 만일 한 심볼에서 비슷한 시간에 가격과 이윤이 동일한 것이 존재 하면 OK로 처리
-            if user_num > 0 and make_price > 0 and profit_money > 0 and symbol != '' and update_time != '':
-                query = f"SELECT order_num FROM tbl_trade_order "
-                query += f" WHERE user_num={user_num} AND market='{market}' AND symbol LIKE '{symbol}%' AND make_price={make_price} AND profit_money={profit_money} AND make_date LIKE'{update_time}%' "
-                query += f" ORDER BY order_date DESC"
-                rows = self.select_sql(query=query)
-                if rows is not None and len(rows) > 1:
-                    for i in range(0, len(rows)):
-                        if i == 0:
-                            continue
-                        else:
-                            row = rows[i]
-                            order_num = row[0]
-                            usql = f"UPDATE tbl_trade_order SET make_money='OK', profit_money='OK', fee_money='OK' WHERE order_num={order_num}"
-                            self.update_sql(usql)
             return res
         except Exception as e:
             self.error("updateTradeOrder " + str(e))
@@ -333,9 +309,9 @@ class MariaDB:
         except Exception as e:
             self.error("updateOrderHoldingStatus " + str(e))
 
-    def updateOrderClose(self, user_num, coin_num, market):
+    def updateOrderClose(self, user_num, coin_num, market, isRun):
         try:
-            sql = f"UPDATE tbl_live_coins SET is_run=0, hold_status=0 "
+            sql = f"UPDATE tbl_live_coins SET is_run={isRun}, hold_status=0 "
             sql += f"WHERE user_num={user_num} AND coin_num={coin_num} AND market='{market}' "
             self.update_sql(sql)
         except Exception as e:

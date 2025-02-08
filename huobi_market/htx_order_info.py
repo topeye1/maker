@@ -1,6 +1,5 @@
 import json
 import time
-import decimal
 import requests
 import urllib3
 import config
@@ -46,46 +45,49 @@ class HuobiOrderInfo:
                 data = resp['data'][0]
                 if resp['status'] == 'ok' and str(data['order_id_str']) == str(order_id):
                     status = data['status']
-                    if status == 3:  # 주문이 오픈 된 상태
-                        volume = data['volume']
-                        lever_rate = data['lever_rate']
-                        margin_frozen = data['margin_frozen']
-                        price = data['price']
-                        order_money = utils.getRoundDotDigit(decimal.Decimal(margin_frozen) * decimal.Decimal(lever_rate), 4)
-                        if order_money == 0:
-                            order_money = utils.getRoundDotDigit(decimal.Decimal(volume) * decimal.Decimal(price), 4)
-
-                        if self.is_create == 0:
-                            order_data = {
-                                'order_money': order_money
-                            }
-                            type_data = {
-                                'order_money': 'double'
-                            }
-                            where = f"user_num={user_num} AND order_num='{order_id}' AND symbol='{self.symbol}'"
-                            res = connect_db.setUpdateOrder(order_data, type_data, where)
-                            if res > 0:
-                                self.is_create = 1
+                    price = data['price']
+                    fee = data['fee']
+                    order_money = data['trade_turnover']
+                    if price == 0:
+                        price = data['trade_avg_price']
                     if status == 4 or status == 6:  # 주문이 체결 된 상태
                         order_data = {
+                            'order_money': order_money,
+                            'order_price': price,
                             'tp_id': order_id,
                             'sl_id': order_id,
+                            'fee_money': fee,
                             'order_position': 1,
                             'pos_date': utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
                         }
                         type_data = {
+                            'order_money': 'double',
+                            'order_price': 'double',
                             'tp_id': 'str',
                             'sl_id': 'str',
+                            'fee_money': 'str',
                             'order_position': 'int',
                             'pos_date': 'str'
                         }
-                        where = f"user_num={user_num} AND order_num='{order_id}' AND symbol='{self.symbol}' AND order_position = 0"
+                        where = f"user_num={user_num} AND order_num='{order_id}' AND symbol='{self.symbol}'"
                         connect_db.setUpdateOrder(order_data, type_data, where)
-                    return status
-            return 0
+                    return price, order_money
+            return 0, 0
         except requests.exceptions.RequestException as e:
             print(f"Request failed: {e}")
-            return 0
+            return 0, 0
         except Exception as e:
             print(f"HTX onCheckOrderInfo error : {e}")
-            return 0
+            return 0, 0
+
+    def onKeep_TPSL_Price(self, order_id, user_num, tp, sl):
+        order_data = {
+            'tp_price': tp,
+            'sl_price': sl,
+        }
+        type_data = {
+            'tp_price': 'double',
+            'sl_price': 'double',
+        }
+        where = f"user_num={user_num} AND order_num='{order_id}' AND symbol='{self.symbol}'"
+        connect_db.setUpdateOrder(order_data, type_data, where)

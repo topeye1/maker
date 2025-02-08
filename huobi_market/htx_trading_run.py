@@ -3,23 +3,23 @@ import time
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 import utils
-from config import connect_redis
-from huobi_market import htx_cancel_order, htx_order_info, htx_order_history, htx_hoding_run
+from config import connect_redis, connect_db
+from huobi_market import htx_hoding_run, htx_order_info
 
 
 class RunTrading:
-    def __init__(self, api_key, secret_key, symbol, idx, direction, param, w_param, rdb, price, order_id, setting,
-                 tradingCls, user_num):
+    def __init__(self, api_key, secret_key, symbol, idx, direction, param, w_param, rdb, price, swap_order, setting,
+                 tradingCls, user_num, auto_ctime, balance):
         self.idx = idx
         self.direction = direction
         self.api_key = api_key
         self.secret_key = secret_key
         self.symbol = symbol
-        self.order_id = order_id
         self.w_param = w_param
+        self.auto_ctime = auto_ctime
 
-        # 주문 취소 시간(분)
-        self.order_cancel_time = int(w_param['m5']) * 60
+        # 선 주문 취소 시간(분)
+        self.first_cancel_time = int(w_param['m5']) * 60
         # 다음 주문 지연 시간(초)
         self.order_next_time = int(w_param['m8'])
         # param [m7] s1, b1 재주문 지연 시간(초)
@@ -32,9 +32,15 @@ class RunTrading:
         self.strengths = [float(w_param['m1']), float(w_param['m2']), float(w_param['m3']), float(w_param['m4'])]
         # 재 주문 범위
         self.reorder_range = int(w_param['m16'])
+        # 체결이 일어 나지 않을 경우 주문 취소 시간(분)['m19']
+        self.order_restart_time = int(w_param['m19']) * 60
         self.param = param
         self.rate_rev = float(param['rate_rev'])
         self.rate_liq = float(param['rate_liq'])
+        self.coin_num = int(param['coin_num'])
+        self.bet_limit = int(param['bet_limit'])
+        self.leverage = int(param['leverage'])
+        self.dot_digit = int(param['dot_digit'])
         # 홀딩 조건 퍼센트
         self.hold_rate = int(w_param['h1'])
 
@@ -47,40 +53,46 @@ class RunTrading:
         self.user_num = user_num
         # scheduler
         self.check_scheduler = None
-        self.order_info = None
-        self.close_history = None
-
-        self.is_sell = 0
-        self.is_buy = 0
-        self.order_status = 1
-        self.is_next = False
-
+        self.run_scheduler = False
         self.scheduler_time = 3
 
+        self.order_info = None
+        self.close_history = None
         self.checkOrderCnt = 0
         self.cancelOrderCnt = 0
-        self.run_scheduler = False
         self.cancel_time = 0
         self.close_time = 0
-        self.next_complete = False
         self.is_position = False
         self.close_order_id = ''
         self.close_status = 0
-        self.is_close = False
         self.offset = ''
         self.search_time = 0
         self.is_stop = False
+        self.next_price = 0
+        self.amount = 0
+        self.balance = balance
+        self.swap_order = swap_order
+        self.reset_time = 0
+        # Broker ID
+        self.brokerID = w_param['brokerID']
+        self.order_info = htx_order_info.HuobiOrderInfo(self.api_key, self.secret_key, self.symbol)
+
+        self.class_status = 0
+        self.close_cnt = 0
 
     def __del__(self):
-        print(f"HTX - delete run : {self.symbol}-{self.direction} {self.idx}")
+        print(f"htx_trading_run delete : {self.symbol}-{self.direction} {self.idx}")
 
-    def run_reorder(self, idx, direction):
+    def run_reorder(self, idx, direction, price=0):
+        is_status = self.setting.getRunStatus(idx, direction)
+        if is_status == 1:
+            return
+
         if self.setting.is_close or self.setting.s_brake or self.setting.l_stop:
             return
         re_idx = self.setting.checkNextIndex(idx, self.direction)
         if re_idx > -1:
-            real_price = connect_redis.getCoinCurrentPrice(self.rdb, 'htx', self.symbol, 'float')
-            self.tradingCls.run_thread(re_idx, direction, real_price, self.order_price)
+            self.tradingCls.run_thread(re_idx, direction, price)
         else:
             return
 
@@ -100,13 +112,14 @@ class RunTrading:
                 return
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 works = []
-                if self.setting.getRunStatus(self.idx, self.direction) == 0:
+                # 정지된 스레드 닫고 재시작
+                run_status = self.setting.getRunStatus(self.idx, self.direction)
+                pos_status = self.setting.getOrderStatus(self.idx, self.direction)
+                if run_status == 0 and pos_status == 0:
+                    self.class_status = 2
                     self.shutDownCheckSchedule()
                     self.del_run()
                     return
-                # 3초 간격으로 현재가 확인
-                work0 = executor.submit(self.checkPrice)
-                works.append(work0)
 
                 # 30초 간격 으로 주문 체결 및 청산 상태 확인
                 if self.checkOrderCnt >= 30:
@@ -117,12 +130,12 @@ class RunTrading:
                     self.checkOrderCnt += self.scheduler_time
 
                 # [m5]100분후 체결 되지 않은 주문 취소
-                if self.order_status < 4 and self.idx == 0:
-                    if self.cancel_time >= self.order_cancel_time:
-                        work2 = executor.submit(self.cancelHuobiOrder)
+                if run_status == 1 and pos_status < 6 and self.idx == 0:
+                    if self.cancel_time >= self.first_cancel_time:
+                        work2 = executor.submit(self.cancelFirstOrder)
                         works.append(work2)
                         self.cancel_time = 0
-                    self.cancel_time += 3
+                    self.cancel_time += self.scheduler_time
                 else:
                     self.cancel_time = 0
 
@@ -131,6 +144,11 @@ class RunTrading:
                     if self.setting.s_brake or self.setting.l_stop:
                         work3 = executor.submit(self.checkHoldingStatus)
                         works.append(work3)
+
+                if run_status == 1 and pos_status < 6:
+                    if self.is_position is False:
+                        work4 = executor.submit(self.onOpenOrderPosition)
+                        works.append(work4)
 
                 concurrent.futures.wait(works)
                 executor.shutdown()
@@ -148,150 +166,126 @@ class RunTrading:
         pro = utils.getCurrentMinMaxProValue(max_price, min_price, c_price)
         return pro
 
-    # 3초 간격으로 현재가 확인
-    def checkPrice(self):
-        if self.setting.s_brake or self.setting.l_stop:
-            self.cancelBreakOrders()
-            self.is_stop = True
-        if self.is_stop and self.setting.s_brake is False and self.setting.l_stop is False:
-            self.is_next = False
-            self.is_stop = False
-
-        if self.setting.symbol_price is None or self.setting.symbol_price == 0:
-            self.is_sell = 0
-            self.is_buy = 0
-            return
-
-        min_max_pro = self.getMinMaxPro(self.setting.symbol_price)
-        if self.direction == 'sell':
-            com_price = self.order_price + (
-                        self.order_price * (self.rate_rev + min_max_pro) / 100 * self.getOrderStrength())
-            if self.setting.symbol_price > com_price:
-                self.is_sell = 1
-            else:
-                self.is_sell = 0
-        if self.direction == 'buy':
-            com_price = self.order_price - (
-                        self.order_price * (self.rate_rev + min_max_pro) / 100 * self.getOrderStrength())
-            if self.setting.symbol_price < com_price:
-                self.is_buy = 1
-            else:
-                self.is_buy = 0
-
-    def checkOrderExecution(self, tp, sl, amount):
-        self.setting.setStOrderStatus(self.idx, 'create', self.direction, self.order_price, tp, sl, amount, self.order_id)
-        self.order_info = htx_order_info.HuobiOrderInfo(self.api_key, self.secret_key, self.symbol)
-        self.close_history = htx_order_history.HuobiOrderHistory(self.api_key, self.secret_key, self.symbol)
-        self.checkTradeOrder()
+    def checkOrderExecution(self, amount):
+        self.setting.setRunStatus(self.idx, self.direction, 1)
+        self.setting.setOrderStatus(self.idx, self.direction, 3)
+        self.class_status = 1
+        self.amount = amount
         self.start_order_scheduler()
+
+    def onOpenOrderPosition(self):
+        # 주문이 오픈 상태로 설정
+        is_open = False
+        if self.direction == 'buy':
+            if self.order_price <= self.setting.symbol_price:
+                is_open = True
+        elif self.direction == 'sell':
+            if self.order_price >= self.setting.symbol_price:
+                is_open = True
+
+        if is_open is False:
+            self.is_position = False
+            return
+        self.is_position = True
+
+        price = 0
+        min_max_pro = self.getMinMaxPro(self.order_price)
+        if self.direction == "sell":
+            if self.idx == 0:
+                price = self.order_price - self.order_price * ((self.rate_liq + min_max_pro) / 100) * self.strengths[
+                    self.idx]
+            else:
+                price = self.order_price
+        elif self.direction == "buy":
+            if self.idx == 0:
+                price = self.order_price + self.order_price * ((self.rate_liq + min_max_pro) / 100) * self.strengths[
+                    self.idx]
+            else:
+                price = self.order_price
+        state, order_id, volume = self.swap_order.onTradingSwapOrder(self.direction, self.idx, self.balance,
+                                                                     self.amount, self.order_price, self.leverage,
+                                                                     self.bet_limit,
+                                                                     price, self.rate_rev, self.rate_liq, self.brokerID)
+        if state:
+            # 마켓 주문 가격 얻기
+            order_price, order_money = self.order_info.onCheckOrderInfo(order_id, self.user_num)
+
+            tp_price = 0
+            sl_price = 0
+            if self.direction == "sell":
+                tp_price = utils.getRoundDotDigit(
+                    order_price - order_price * (self.rate_rev / 100) * (1 + self.strengths[self.idx]) / 2,
+                    self.dot_digit)
+                sl_price = utils.getRoundDotDigit(order_price + order_price * (self.rate_liq / 100), self.dot_digit)
+            elif self.direction == "buy":
+                tp_price = utils.getRoundDotDigit(
+                    order_price + order_price * (self.rate_rev / 100) * (1 + self.strengths[self.idx]) / 2,
+                    self.dot_digit)
+                sl_price = utils.getRoundDotDigit(order_price - order_price * (self.rate_liq / 100), self.dot_digit)
+            # tp/sl 보관
+            self.order_info.onKeep_TPSL_Price(order_id, self.user_num, tp_price, sl_price)
+            self.setting.setStOrderStatus(self.idx, 'create', self.direction, order_price, tp_price, sl_price,
+                                          self.amount, volume, order_money, order_id)
+        else:
+            self.class_status = 2
+            self.shutDownCheckSchedule()
+            self.del_run()
+            self.setting.setStOrderStatus(self.idx, 'complete', self.direction)
+            self.run_reorder(self.idx, self.direction)
 
     # 30초 간격 으로 해당 주문 체결이 완료 되었 는지 체크 하기
     def checkTradeOrder(self):
-        # 주문이 체결 되였 는지, 청산이 완료 되였 는지 체크
+        pos_status = self.setting.getOrderStatus(self.idx, self.direction)
+        if pos_status < 6:
+            return
+        # 주문이 SL 상태 인지 체크
         tp, sl = self.setting.getTpSl(self.idx, self.direction)
-        status = self.setting.getOrderStatus(self.idx, self.direction)
-        if status == 3:
-            self.order_status = self.order_info.onCheckOrderInfo(self.order_id, self.user_num)
-            self.setting.setOrderStatus(self.idx, self.direction, self.order_status)
-            if self.idx > 0:
-                pre_idx = self.idx - 1
-                # B2~B4, S2~S4 의 경우 이전 주문이 청산 완료 되면 주문 취소
-                if self.setting.getRunStatus(pre_idx, self.direction) == 0:
-                    self.cancelCurrentOrders()
+        if sl == 0:
+            return
+        b_complete = False
+        if self.direction == 'buy':
+            if self.setting.symbol_price <= sl:
+                b_complete = True
+        elif self.direction == 'sell':
+            if self.setting.symbol_price >= sl:
+                b_complete = True
 
-        if status == 4 or status == 6:
-            if self.is_close is False:
-                self.setting.setOrderStatus(self.idx, self.direction, status)
-                self.setting.setPositionOrderID(self.idx, self.direction)
-                # 주문 청산 완료 되었 는지 체크 하기
-                side = 'sell'
-                if self.direction == 'sell':
-                    side = 'buy'
-                if self.close_order_id == '':
-                    self.search_time = 0
-                    self.offset, self.close_order_id = self.close_history.getHuobiOrderHistory(self.order_id,
-                                                                                               self.user_num, tp, sl,
-                                                                                               side)
-                else:
-                    if self.close_status == 7:
-                        self.offset = self.close_history.getHuobiOrderRiskHistory(self.user_num, self.close_order_id)
-                    else:
-                        if self.search_time == 0:
-                            self.search_time = utils.setTimezoneTimestamp()
-                        self.offset, self.close_status = self.close_history.getHuobiOrderIDHistory(self.user_num,
-                                                                                                   self.close_order_id,
-                                                                                                   self.search_time)
-
-                # 주문이 체결 완료
-                if self.idx > 0:
-                    self.next_complete = True
-                if self.is_position is False:
-                    self.is_position = True
-                    self.setting.position_num += 1
-            # 주문이 청산 완료 되었 을 때
-            if self.offset == 'close':
-                self.is_close = True
-                if status == 4:
-                    self.cancelSubOrder()
-                self.setting.setStOrderStatus(self.idx, 'complete', self.direction)
-                # 청산 완료된 스케쥴 끝내기
-                self.shutDownCheckSchedule()
-                self.del_run()
-                # 재 주문 넣기
-                self.setReOrder()
-            # 다음 주문 넣기
-            if self.is_next is False:
-                self.setNextOrder()
-
-    # s1, b1 새 주문 범위 판단
-    def checkFirstOrderRange(self):
-        if self.idx > 0:
-            return True
-        if self.direction == 'sell':
-            buy4_price = self.setting.getOrderPrice(3, 'buy')
-            if buy4_price == 0:
-                return True
-            limit_price = buy4_price - buy4_price * (self.rate_rev / 100) * self.reorder_range
-            if self.setting.symbol_price < limit_price:
-                return False
+        if b_complete:
+            # 주문 닫기
+            self.closeSLOrders()
+            # 재 주문 넣기
+            self.setReOrder()
         else:
-            sell4_price = self.setting.getOrderPrice(3, 'sell')
-            if sell4_price == 0:
-                return True
-            limit_price = sell4_price + sell4_price * (self.rate_rev / 100) * self.reorder_range
-            if self.setting.symbol_price > limit_price:
-                return False
-        return True
+            # 다음 주문 넣기
+            next_status = self.setting.getNextStatus(self.idx, self.direction)
+            is_next_price = self.calcNextOrderPrice()
+            if is_next_price and next_status == 0:
+                self.setNextOrder()
 
     # 재주문 넣기
     def setReOrder(self):
-        check_first_order_status = self.checkFirstOrderRange()
-        if check_first_order_status:
-            re_idx = self.setting.checkNextIndex(self.idx, self.direction)
-            if re_idx >= 0:
-                self.sleep_time(re_idx)
-                self.run_reorder(re_idx, self.direction)
+        # break 상태 나 holding 상태 이면 주문을 넣지 않는다.
+        if self.setting.s_brake or self.setting.l_stop or self.setting.holding_status:
+            return
+        if self.idx == 0:
+            self.sleep_time(self.idx)
+            self.run_reorder(self.idx, self.direction)
 
     # 다음 주문 넣기
     def setNextOrder(self):
         # break 상태 나 holding 상태 이면 주문을 넣지 않는다.
         if self.setting.s_brake or self.setting.l_stop or self.setting.holding_status:
             return
-        check_first_order_status = self.checkFirstOrderRange()
-        if check_first_order_status:
-            if self.idx < 3:
-                number = self.idx + 1
-            else:
-                number = 0
-            next_idx = -1
-            if self.is_sell == 1:
-                next_idx = self.setting.checkNextIndex(number, self.direction)
-            elif self.is_buy == 1:
-                next_idx = self.setting.checkNextIndex(number, self.direction)
-            if next_idx > -1:
-                self.sleep_time(next_idx)
-                self.run_reorder(next_idx, self.direction)
-                self.is_next = True
+        if self.idx < 3:
+            number = self.idx + 1
+        else:
+            number = 0
+        next_idx = self.setting.checkNextIndex(number, self.direction)
+        if next_idx > -1:
+            # 현 주문의 다음 주문 넣기
+            self.setting.setNextStatus(self.idx, self.direction, 1)
+            self.sleep_time(next_idx)
+            self.run_reorder(next_idx, self.direction, self.next_price)
 
     def sleep_time(self, idx):
         if self.idx == idx:
@@ -317,65 +311,106 @@ class RunTrading:
             self.run_scheduler = False
             print(f"HTX shutDownCheckSchedule() error : {e}")
 
-    # 120분내에 주문이 체결되지 않으면 취소, 코인이 실행 중지 이면 취소
-    def cancelHuobiOrder(self):
-        cancel_order = htx_cancel_order.CancelOrder(self.api_key, self.secret_key, self.user_num)
-        if cancel_order.onCancelOrder(self.order_id, self.symbol):
-            self.setting.setStOrderStatus(self.idx, 'complete', self.direction)
-            self.setting.setOrderStatus(self.idx, self.direction, 0)
-            idx = self.setting.checkNextIndex(self.idx, self.direction)
-            if idx > -1:
-                self.sleep_time(idx)
-                self.run_reorder(idx, self.direction)
+    # 선 주문 취소
+    def cancelFirstOrder(self):
+        self.class_status = 2
+        self.shutDownCheckSchedule()
+        self.del_run()
+        self.setting.setStOrderStatus(self.idx, 'complete', self.direction)
+        self.sleep_time(self.idx)
+        self.run_reorder(self.idx, self.direction)
+
+    # SL 가격 으로 완료 된 주문 끝내기
+    def closeSLOrders(self):
+        volume = self.setting.getVolume(self.idx, self.direction)
+        order_money = self.setting.getOrderMoney(self.idx, self.direction)
+        # 주문 닫는 api 호출 하기
+        order_id = self.setting.getOrderID(self.idx, self.direction)
+        close_price = self.setting.symbol_price
+        close_side = self.direction
+        profit = 0
+        if self.direction == "sell":
+            close_price = self.setting.symbol_price + self.setting.symbol_price * (5 / 100)
+            profit = (self.order_price - self.setting.symbol_price) / self.order_price * order_money
+            close_side = "buy"
+        elif self.direction == "buy":
+            close_price = self.setting.symbol_price - self.setting.symbol_price * (5 / 100)
+            profit = (self.setting.symbol_price - self.order_price) / self.order_price * order_money
+            close_side = "sell"
+        profit = utils.getRoundDotDigit(profit, 6)
+        make_money = order_money + profit
+        b_cl = self.swap_order.onTradingSwapCloseOrder(self.symbol, close_side, order_id, volume, close_price, make_money, profit, self.leverage, self.setting.symbol_price, self.brokerID)
+        # 주문 서비스 종료
+        if b_cl or self.close_cnt > 2:
+            self.close_cnt = 0
+            self.class_status = 2
             self.shutDownCheckSchedule()
             self.del_run()
-
-    # sub 주문 취소
-    def cancelSubOrder(self):
-        cancel_order = htx_cancel_order.CancelOrder(self.api_key, self.secret_key, self.user_num)
-        if cancel_order.onCancelOrder(self.order_id, self.symbol, True):
-            print(f"cancelSubOrder : OK\n")
-
-    # l-stop, s-break 상태 에서 주문 취소
-    def cancelBreakOrders(self):
-        if self.order_status == 4 or self.order_status == 6:
-            return
-        cancel_order = htx_cancel_order.CancelOrder(self.api_key, self.secret_key, self.user_num)
-        if cancel_order.onCancelOrder(self.order_id, self.symbol):
             self.setting.setStOrderStatus(self.idx, 'complete', self.direction)
-            self.setting.setOrderStatus(self.idx, self.direction, 0)
-            self.shutDownCheckSchedule()
-            self.del_run()
+            for i in range(self.idx, 4):
+                run = self.setting.getRunStatus(i, self.direction)
+                pos = self.setting.getOrderStatus(i, self.direction)
+                if run == 1 and pos < 6:
+                    self.setting.setRunStatus(i, self.direction, 0)
+                    self.setting.setOrderStatus(i, self.direction, 0)
+        else:
+            self.close_cnt += 1
+            time.sleep(10)
+            self.closeSLOrders()
 
-    # 이전 주문 완료 이면 현재 주문 취소
-    def cancelCurrentOrders(self):
-        cancel_order = htx_cancel_order.CancelOrder(self.api_key, self.secret_key, self.user_num)
-        if cancel_order.onCancelOrder(self.order_id, self.symbol):
-            self.setting.setStOrderStatus(self.idx, 'complete', self.direction)
-            self.setting.setOrderStatus(self.idx, self.direction, 0)
-            idx = self.setting.checkNextIndex(0, self.direction)
-            if idx == 0:
-                self.sleep_time(idx)
-                self.run_reorder(idx, self.direction)
-            self.shutDownCheckSchedule()
-            self.del_run()
-
+    # Holding 상태 확인
     def checkHoldingStatus(self):
+        s1_status = self.setting.getOrderStatus(0, 'sell')
+        s2_status = self.setting.getOrderStatus(1, 'sell')
+        b1_status = self.setting.getOrderStatus(0, 'buy')
+        b2_status = self.setting.getOrderStatus(1, 'buy')
+        if s1_status == 6 and s2_status == 6 and b1_status == 6 and b2_status == 6:
+            # S1S2 + B1B2의 경우가 생기면 Holding 으로 상태를 전환
+            self.setting.holding_status = True
+            connect_db.setOrderHoldingStatus(self.user_num, self.coin_num, 'htx', 1)
+        else:
+            if self.direction == 'buy':
+                price1 = utils.getRoundDotDigit(float(self.setting.BUY_PRICE[0]), 6)
+                # 현재 가격이 홀딩 조건 가격 보다 더 커지면
+                limit_price = utils.getRoundDotDigit(float(price1 + price1 * (self.hold_rate / 100)), 6)
+                if self.setting.symbol_price >= limit_price and price1 > 0:
+                    self.setting.holding_status = True
+                    hold_price = utils.getRoundDotDigit(
+                        float(self.setting.symbol_price - self.setting.symbol_price * (5 / 100)), 6)
+                    holdingCls = htx_hoding_run.HoldingOrderTradeHTX(self.param, self.w_param, self.rdb, self.setting)
+                    holdingCls.run_holding_thread(4, 'sell', hold_price)
+            elif self.direction == 'sell':
+                price1 = utils.getRoundDotDigit(float(self.setting.SELL_PRICE[0]), 6)
+                # 현재 가격이 홀딩 조건 가격 보다 더 작으면
+                limit_price = utils.getRoundDotDigit(float(price1 - price1 * (self.hold_rate / 100)), 6)
+                if self.setting.symbol_price <= limit_price and price1 > 0:
+                    self.setting.holding_status = True
+                    hold_price = utils.getRoundDotDigit(
+                        float(self.setting.symbol_price + self.setting.symbol_price * (5 / 100)), 6)
+                    holdingCls = htx_hoding_run.HoldingOrderTradeHTX(self.param, self.w_param, self.rdb, self.setting)
+                    holdingCls.run_holding_thread(4, 'buy', hold_price)
+
+    # 다음 주문 가격 확인
+    def calcNextOrderPrice(self):
+        if self.setting.holding_status:
+            return False
+        if self.idx < 3:
+            next_idx = self.idx + 1
+        else:
+            next_idx = 0
+        self.next_price = 0
         if self.direction == 'buy':
-            price1 = utils.getRoundDotDigit(float(self.setting.BUY_PRICE[0]), 6)
-            # 현재 가격이 홀딩 조건 가격 보다 더 작으면
-            limit_price = utils.getRoundDotDigit(float(price1 - price1 * (self.hold_rate / 100)), 6)
-            if self.setting.symbol_price <= limit_price and price1 > 0:
-                self.setting.holding_status = True
-                hold_price = utils.getRoundDotDigit(float(self.setting.symbol_price - self.setting.symbol_price * (3 / 100)), 6)
-                holdingCls = htx_hoding_run.HoldingOrderTradeHTX(self.param, self.w_param, self.rdb, self.setting)
-                holdingCls.run_holding_thread(4, 'sell', hold_price)
+            comp_price = self.order_price + (self.order_price * (self.rate_liq / 100)) * self.strengths[next_idx]
+            if self.setting.symbol_price >= comp_price:
+                self.next_price = self.setting.symbol_price + self.setting.symbol_price * (self.rate_liq / 100) * \
+                                  self.strengths[next_idx]
         elif self.direction == 'sell':
-            price1 = utils.getRoundDotDigit(float(self.setting.SELL_PRICE[0]), 6)
-            # 현재 가격이 홀딩 조건 가격 보다 더 커지면
-            limit_price = utils.getRoundDotDigit(float(price1 + price1 * (self.hold_rate / 100)), 6)
-            if self.setting.symbol_price >= limit_price and price1 > 0:
-                self.setting.holding_status = True
-                hold_price = utils.getRoundDotDigit(float(self.setting.symbol_price + self.setting.symbol_price * (3 / 100)), 6)
-                holdingCls = htx_hoding_run.HoldingOrderTradeHTX(self.param, self.w_param, self.rdb, self.setting)
-                holdingCls.run_holding_thread(4, 'buy', hold_price)
+            comp_price = self.order_price - (self.order_price * (self.rate_liq / 100)) * self.strengths[next_idx]
+            if self.setting.symbol_price <= comp_price:
+                self.next_price = self.setting.symbol_price - self.setting.symbol_price * (self.rate_liq / 100) * \
+                                  self.strengths[next_idx]
+
+        if self.next_price > 0:
+            self.next_price = utils.getRoundDotDigit(self.next_price, self.dot_digit)
+            return True
+        return False

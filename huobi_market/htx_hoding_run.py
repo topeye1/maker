@@ -1,7 +1,5 @@
-import concurrent.futures
 import threading
 
-from apscheduler.schedulers.background import BackgroundScheduler
 import utils
 from config import connect_db, connect_redis
 from huobi_market import htx_swap_order, htx_order_info, htx_order_history
@@ -24,11 +22,6 @@ class HoldingOrderTradeHTX:
         self.dot_digit = int(param['dot_digit'])
         self.min_digit = float(param['min_digit'])
 
-        # 주문 강도
-        self.strengths = [float(w_param['m1']), float(w_param['m2']), float(w_param['m3']), float(w_param['m4'])]
-        # 주문 수량
-        self.orderCounts = [float(w_param['m12']), float(w_param['m13']), float(w_param['m14']), float(w_param['m15'])]
-
         self.rdb = rdb
 
         # Broker ID
@@ -36,55 +29,7 @@ class HoldingOrderTradeHTX:
 
         self.swap_order = None
         self.setting = setting
-        self.live_run = None
-
-        self.holding_scheduler = None
-        self.holding_period = 3
-
         self.order_info = htx_order_info.HuobiOrderInfo(self.api_key, self.secret_key, self.symbol)
-        self.close_history = htx_order_history.HuobiOrderHistory(self.api_key, self.secret_key, self.symbol)
-        self.hold_order_id = 0
-        self.direction = ''
-        self.tp = 0
-        self.sl = 0
-        self.close_order_id = ''
-        self.close_status = 0
-        self.search_time = 0
-
-    def __del__(self):
-        print(f"HTX - holding delete run : {self.symbol}-{self.direction} 4")
-
-    def del_run(self):
-        del self
-
-    def onTradingScheduler(self):
-        self.holding_scheduler = BackgroundScheduler()
-        self.holding_scheduler.add_job(self.tradeScheduler, 'interval', seconds=self.holding_period, max_instances=50, misfire_grace_time=10, coalesce=True)
-        self.holding_scheduler.start()
-
-    def shutDownSchedule(self):
-        try:
-            if self.holding_scheduler.running:
-                self.holding_scheduler.shutdown(wait=False)
-            else:
-                print("Huobi trade_scheduler is not running")
-        except Exception as e:
-            print(f"Huobi trade_scheduler has already been shutdown. {e}")
-
-    def tradeScheduler(self):
-        try:
-            if self.holding_scheduler is None:
-                return
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                works = []
-                # 체결 된 주문이 존재 하는지 체크
-                if self.setting.holding_status:
-                    work0 = executor.submit(self.checkTradeOrder)
-                    works.append(work0)
-                concurrent.futures.wait(works)
-                executor.shutdown()
-        except Exception as e:
-            print(f"HTX tradeScheduler error : {e}")
 
     def run_holding_thread(self, idx, direction, price):
         try:
@@ -97,67 +42,41 @@ class HoldingOrderTradeHTX:
             if balance > 0:
                 connect_db.setUsersAmount(self.user_num, 'htx', utils.getRoundDotDigit(float(balance), 2))
 
-            hold_thread = threading.Thread(target=self.onCreateIsolatedTPSL, args=(idx, direction, balance, price))
+            hold_thread = threading.Thread(target=self.onOpenHoldingOrderPosition, args=(idx, direction, balance, price))
             hold_thread.start()
         except Exception as e:
-            print(f"HTX run_thread error : {e}")
+            print(f"HTX run_holding_thread error : {e}")
             return
 
     # create holding order
-    def onCreateIsolatedTPSL(self, idx, direction, balance, price):
-        if price == 0:
+    def onOpenHoldingOrderPosition(self, idx, direction, balance, price):
+        try:
+            if price == 0:
+                return
+
+            print(f"onOpenHoldingOrderPosition : {self.symbol}-{direction}, BUY_AMOUNT={self.setting.BUY_AMOUNT}, SELL_AMOUNT={self.setting.SELL_AMOUNT}")
+            amount = 0
+            if direction == "sell":
+                for buy_amount in self.setting.BUY_AMOUNT:
+                    amount += buy_amount
+            elif direction == "buy":
+                for sell_amount in self.setting.SELL_AMOUNT:
+                    amount += sell_amount
+
+            if self.setting.symbol_price == 0:
+                self.setting.symbol_price = connect_redis.getCoinCurrentPrice(self.rdb, 'htx', self.symbol, 'float')
+
+            if float(self.setting.symbol_price) > 0 and amount > 0:
+                state, order_id, volume, order_money = self.swap_order.onTradingSwapOrder(direction, idx, balance, amount, float(self.setting.symbol_price), self.leverage, self.bet_limit,
+                                                                                          price, self.rate_rev, self.rate_liq, self.brokerID, self.coin_num)
+                print(f"Holding order : {self.symbol} {direction}-{idx}, state={state}, order_id={order_id}, volume={volume}, amount={amount}, order_money={order_money}")
+                if state:
+                    # 마켓 주문 가격 얻기
+                    order_price, order_money = self.order_info.onCheckOrderInfo(order_id, self.user_num)
+                    self.checkHoldingOrderExecution(idx, direction, amount, volume, order_money, order_id)
+        except Exception as e:
+            print(f"HTX onOpenHoldingOrderPosition error : {self.symbol}, '{e}'")
             return
-        self.direction = direction
-        amount = 0
 
-        tp_price = 0
-        sl_price = 0
-        if direction == "sell":
-            # tp_price = price - price * (self.rate_rev / 100) * (1 + self.strengths[3]) / 2
-            # sl_price = price + price * (self.rate_liq / 100)
-            for i in range(0, 4):
-                amount += self.setting.BUY_AMOUNT[i]
-        elif direction == "buy":
-            # tp_price = price + price * (self.rate_rev / 100) * (1 + self.strengths[3]) / 2
-            # sl_price = price - price * (self.rate_liq / 100)
-            for i in range(0, 4):
-                amount += self.setting.SELL_AMOUNT[i]
-
-        if self.setting.symbol_price == 0:
-            self.setting.symbol_price = connect_redis.getCoinCurrentPrice(self.rdb, 'htx', self.symbol, 'float')
-
-        if float(self.setting.symbol_price) > 0:
-            state, self.hold_order_id, self.tp, self.sl = self.swap_order.onTradingSwapOrder(direction, idx, balance, amount, float(self.setting.symbol_price), self.leverage, self.bet_limit,
-                                                                                             price, tp_price, sl_price, self.rate_rev, self.rate_liq, self.brokerID, self.coin_num)
-            """
-            if state:
-                self.onTradingScheduler()
-            """
-
-    # Holding 주문 체결 확인
-    def checkTradeOrder(self):
-        # 주문이 체결 되였 는지, 청산이 완료 되였 는지 체크
-        status = self.order_info.onCheckOrderInfo(self.hold_order_id, self.user_num)
-        if status == 4 or status == 6:
-            # 주문 청산 완료 되었 는지 체크 하기
-            side = 'sell'
-            if self.direction == 'sell':
-                side = 'buy'
-            if self.close_order_id == '':
-                self.search_time = 0
-                offset, self.close_order_id = self.close_history.getHuobiOrderHistory(self.hold_order_id, self.user_num, self.tp, self.sl, side)
-            else:
-                if self.close_status == 7:
-                    offset = self.close_history.getHuobiOrderRiskHistory(self.user_num, self.close_order_id)
-                else:
-                    if self.search_time == 0:
-                        self.search_time = utils.setTimezoneTimestamp()
-                    offset, self.close_status = self.close_history.getHuobiOrderIDHistory(self.user_num, self.close_order_id, self.search_time)
-
-            # 주문이 청산 완료 되었 을 때
-            if offset == 'close':
-                self.setting.holding_status = False
-                connect_db.setOrderClose(self.user_num, self.coin_num, 'htx')
-                # 청산 완료된 스케쥴 끝내기
-                self.shutDownSchedule()
-                self.del_run()
+    def checkHoldingOrderExecution(self, idx, direction, amount, volume, money, order_id):
+        self.setting.setStOrderStatus(idx, 'create', direction, self.setting.symbol_price, 0, 0, amount, volume, money, order_id)

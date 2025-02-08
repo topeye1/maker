@@ -5,7 +5,7 @@ import time
 from apscheduler.schedulers.background import BackgroundScheduler
 import utils
 from config import connect_redis, connect_db
-from huobi_market import htx_swap_order, htx_trading_run, htx_setting, htx_cancel_order, htx_unsave_order
+from huobi_market import htx_swap_order, htx_trading_run, htx_setting, htx_cancel_order
 from huobi_market.htx_balance import getHuobiFutureBalance
 
 
@@ -24,10 +24,16 @@ class OrderTradeHTX:
         self.secret_key = str(param['secret_key'])
         self.dot_digit = int(param['dot_digit'])
         self.min_digit = float(param['min_digit'])
+        # 자동 청산 처리 시간
+        self.auto_ctime = float(param['auto_ctime']) * 60 * 60
 
         self.w_param = w_param  # maker parameter
-        # 체결이 일어나지 않을 경우 주문 취소 시간(1시간)['m19']
-        self.order_restart_time = int(w_param['m19']) * 60 * 60
+        # param [m7] s1, b1 재주문 지연 시간(초)
+        self.order_one_reset_time = int(w_param['m7'])
+        # param [m10] s2~s4, b2~b4 재주문 지연 시간(초)
+        self.order_two_reset_time = int(w_param['m10'])
+        # 체결이 일어 나지 않을 경우 주문 취소 시간(분)['m19']
+        self.order_restart_time = int(w_param['m19']) * 60
         # 주문 강도
         self.strengths = [float(w_param['m1']), float(w_param['m2']), float(w_param['m3']), float(w_param['m4'])]
         # 주문 수량
@@ -72,15 +78,10 @@ class OrderTradeHTX:
         self.live_instances = []
         self.reset_time = 0
         self.is_all_close = False
-        self.is_position_status = 0
         self.stop_time = 0
         self.brake_time = 0
-        self.order_number = 0
-        self.l_stop = False
-        self.s_break = False
-        self.s_one_break = False
-        self.stop_check_time = 0
-        self.is_one = False
+        self.c_time = 0
+        self.is_service_start = False
 
     def del_run(self):
         for instance in self.live_instances:
@@ -89,9 +90,16 @@ class OrderTradeHTX:
             instance.del_run()
             del instance
 
+    def del_run_class(self):
+        for instance in self.live_instances:
+            if instance.class_status == 2:
+                self.live_instances.remove(instance)
+                del instance
+
     def onTradingScheduler(self):
         self.trade_scheduler = BackgroundScheduler()
-        self.trade_scheduler.add_job(self.tradeScheduler, 'interval', seconds=self.schedule_period, max_instances=50, misfire_grace_time=10, coalesce=True)
+        self.trade_scheduler.add_job(self.tradeScheduler, 'interval', seconds=self.schedule_period, max_instances=50,
+                                     misfire_grace_time=10, coalesce=True)
         self.trade_scheduler.start()
 
     def shutDownSchedule(self):
@@ -117,18 +125,20 @@ class OrderTradeHTX:
                 work1 = executor.submit(self.closeHuobiAllOrders)
                 works.append(work1)
 
-                # 체결 된 주문이 존재 하는지 체크
-                if self.is_position_status != self.setting.position_num:
-                    self.is_position_status = self.setting.position_num
-                    self.reset_time = 0
+                # 포지션 된 주문이 존재 하는지 체크
                 if self.is_all_close is False:
+                    # B1가격 < S1가격 이면서 거래 Reset 대기 시간을 경과 하면
                     if self.order_restart_time > 0:
                         if self.reset_time >= self.order_restart_time:
-                            work2 = executor.submit(self.resetOrder)
-                            works.append(work2)
-                        self.reset_time += self.schedule_period
+                            self.reset_time = 0
+                            is_comp = self.getB1S1PriceCompare()
+                            if is_comp:
+                                work2 = executor.submit(self.resetOrder)
+                                works.append(work2)
+                        else:
+                            self.reset_time += self.schedule_period
 
-                # S-Break 급등, 급락 주문 확인
+                # S-Break 급등, 급락 확인
                 if self.s_brake_time >= self.break_check_time:
                     work3 = executor.submit(self.checkShortBreak)
                     works.append(work3)
@@ -136,7 +146,7 @@ class OrderTradeHTX:
                 else:
                     self.s_brake_time += self.schedule_period
 
-                # L-Stop 급등, 급락 주문 확인
+                # L-Stop 급등, 급락 확인
                 if self.l_stop_time >= self.break_check_time:
                     work4 = executor.submit(self.checkLongStop)
                     works.append(work4)
@@ -156,9 +166,22 @@ class OrderTradeHTX:
                     works.append(work6)
 
                 # B1, S1의 주문이 존재 하지 않을 경우
-                if self.is_one is False:
+                if self.is_service_start:
                     work7 = executor.submit(self.restartFirstOrder)
                     works.append(work7)
+
+                # 자동 청산 처리
+                if self.c_time < self.auto_ctime:
+                    self.c_time += self.schedule_period
+                else:
+                    work8 = executor.submit(self.autoPositionProcess)
+                    works.append(work8)
+                    self.c_time = 0
+
+                # 정지된 주문 클래스 삭제
+                if len(self.live_instances) > 0:
+                    work9 = executor.submit(self.del_run_class)
+                    works.append(work9)
 
                 concurrent.futures.wait(works)
                 executor.shutdown()
@@ -187,13 +210,15 @@ class OrderTradeHTX:
     def checkShortBreak(self):
         if self.sb_price == 0:
             return
+        """
         pos_status = self.setting.getSymbolPositionStatus()
         if pos_status:
             return
-
+        """
         brake_rate = ((self.setting.symbol_price - self.sb_price) / self.sb_price) * 100
-        if abs(brake_rate) > self.s_brake_rate and self.setting.s_brake is False:
+        if abs(brake_rate) >= self.s_brake_rate and self.setting.s_brake is False:
             self.setting.s_brake = True
+            self.closeOpenThread()
             if self.setting.l_stop:
                 connect_db.changeBreakStatus(self.user_num, self.symbol, 'htx', 4)
             else:
@@ -205,13 +230,15 @@ class OrderTradeHTX:
 
     # L-Stop 급등, 급락 체크
     def checkLongStop(self):
+        """
         pos_status = self.setting.getSymbolPositionStatus()
         if pos_status:
             return
-
+        """
         stop_rate = ((self.setting.max_price - self.setting.min_price) / self.setting.symbol_price) * 100
-        if stop_rate >= self.l_stop_rate and self.setting.l_stop is False:
+        if abs(stop_rate) >= self.l_stop_rate and self.setting.l_stop is False:
             self.setting.l_stop = True
+            self.closeOpenThread()
             if self.setting.s_brake:
                 connect_db.changeBreakStatus(self.user_num, self.symbol, 'htx', 4)
             else:
@@ -235,27 +262,25 @@ class OrderTradeHTX:
                 break
         if is_cancel:
             self.is_all_close = True
-            self.order_number = 0
             self.stop_time = 0
             self.brake_time = 0
             self.setting.is_close = True
             self.setting.max_price = 0
             self.setting.min_price = 0
-            if self.setting.holding_status:
-                connect_db.setOrderClose(self.user_num, self.coin_num, 'htx')
-                self.setting.holding_status = False
-
-            self.onCloseSymbolOrder()
-            # 주문의 실행 상태 0 (stop 상태)
-            connect_db.setCloseOrderStatus(self.symbol, self.user_num, 'htx')
-            # 처리 안된 포지션 삭제 하기
-            connect_db.delCancelPosition(self.symbol, self.user_num, 'htx')
+            self.is_service_start = False
 
             i = 0
             for stop_htx in utils.stop_htx_info:
                 if stop_htx[2] == self.symbol:
                     del utils.stop_htx_info[i]
                 i += 1
+
+            self.onCloseSymbolOrder(True)
+            # 주문의 실행 상태 0 (stop 상태)
+            connect_db.setCloseOrderStatus(self.symbol, self.user_num, 'htx')
+            # 처리 안된 포지션 삭제 하기
+            # connect_db.delCancelPosition(self.symbol, self.user_num, 'htx')
+
             """
             # 청산 후 보관 되지 않은 주문 보관 하기
             unclear_ids = connect_db.getUnSaveTradeIds(self.user_num, 'htx')
@@ -266,57 +291,79 @@ class OrderTradeHTX:
             self.shutDownSchedule()
             self.del_run()
 
-    def onCloseSymbolOrder(self):
+    def onCloseSymbolOrder(self, is_down):
         cancel_order = htx_cancel_order.CancelOrder(self.api_key, self.secret_key, self.user_num)
         # 체결 안된 주문 취소
         cancel_order.onCancelAllTrade(self.symbol, 'htx')
         # 체결 된 주문 강제 청산
         sell_ids = []
-        for i in range(3, -1, -1):
-            sell_id = self.setting.getPositionOrderID(i, 'sell')
+        for i in range(4, -1, -1):
+            sell_id = self.setting.getOrderID(i, 'sell')
             if sell_id != '':
                 sell_ids.append(sell_id)
-            else:
-                self.setting.setStOrderStatus(i, 'complete', 'sell')
+        datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"   {datetime} ---onCloseSymbolOrder : {self.symbol}, sell_ids={sell_ids} ")
         sell_close_id = cancel_order.onClosePositionOrder(self.user_num, self.symbol, 'sell', sell_ids)
-        if sell_close_id != '':
-            s_closed = False
-            for sell_id in sell_ids:
+        if str(sell_close_id) != '':
+            for i in range(0, len(sell_ids)):
+                idx = self.setting.getIDX('sell', sell_ids[i])
+                order_price = self.setting.getOrderPrice(idx, 'sell')
+                order_money = self.setting.getOrderMoney(idx, 'sell')
+                profit = utils.getRoundDotDigit((order_price - self.setting.symbol_price) / order_price * order_money,
+                                                self.dot_digit)
+                make_money = order_money + profit
+                self.swap_order.saveClosedOrderInfo(self.symbol, sell_ids[i], sell_close_id, self.setting.symbol_price,
+                                                    make_money, profit)
+                self.setting.setStOrderStatus(idx, 'complete', 'sell')
                 time.sleep(1)
-                res = cancel_order.closeAllOrderHistory(self.user_num, self.symbol, sell_id, sell_close_id, s_closed)
-                if res == 1:
-                    s_closed = True
         buy_ids = []
-        for i in range(3, -1, -1):
-            buy_id = self.setting.getPositionOrderID(i, 'buy')
+        for i in range(4, -1, -1):
+            buy_id = self.setting.getOrderID(i, 'buy')
             if buy_id != '':
                 buy_ids.append(buy_id)
-            else:
-                self.setting.setStOrderStatus(i, 'complete', 'buy')
+        datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"   {datetime} ---onCloseSymbolOrder : {self.symbol}, buy_ids={buy_ids} ")
         buy_close_id = cancel_order.onClosePositionOrder(self.user_num, self.symbol, 'buy', buy_ids)
-        if buy_close_id != '':
-            b_closed = False
-            for buy_id in buy_ids:
+        if str(buy_close_id) != '':
+            for i in range(0, len(buy_ids)):
+                idx = self.setting.getIDX('buy', buy_ids[i])
+                order_price = self.setting.getOrderPrice(idx, 'buy')
+                order_money = self.setting.getOrderMoney(idx, 'buy')
+                profit = utils.getRoundDotDigit((self.setting.symbol_price - order_price) / order_price * order_money,
+                                                self.dot_digit)
+                make_money = order_money + profit
+                self.swap_order.saveClosedOrderInfo(self.symbol, buy_ids[i], buy_close_id, self.setting.symbol_price,
+                                                    make_money, profit)
+                self.setting.setStOrderStatus(idx, 'complete', 'buy')
                 time.sleep(1)
-                res = cancel_order.closeAllOrderHistory(self.user_num, self.symbol, buy_id, buy_close_id, b_closed)
-                if res == 1:
-                    b_closed = True
-        # 코인별 설정 정보 초기화
+
+        if is_down:
+            connect_db.setOrderClose(self.user_num, self.coin_num, 'htx', 0)
+        else:
+            connect_db.setOrderClose(self.user_num, self.coin_num, 'htx', 1)
         self.setting.initParams()
 
     # ['m19'](1시간) 시간 동안 체결이 일어 나지 않을 경우 주문 취소, 새 주문 넣기
     def resetOrder(self):
         # brake 된 상태
-        if self.setting.s_brake or self.setting.l_stop:
+        if self.setting.s_brake or self.setting.l_stop or self.setting.holding_status:
             return
         self.reset_time = 0
-        self.is_position_status = 0
         # 이미 포지션 된 주문 강제 청산
-        self.onCloseSymbolOrder()
-        # ['m7']분 지연
-        time.sleep(int(self.w_param['m7']))
-        # 새 주문 넣기
-        self.onFirstOrder()
+        self.onCloseSymbolOrder(False)
+
+        self.setting.l_stop = False
+        self.setting.s_brake = False
+        self.setting.holding_status = False
+        self.sb_price = self.setting.symbol_price
+        self.s_brake_cnt = 0
+        self.s_brake_time = 0
+        self.l_stop_time = 0
+        self.setting.max_price = 0
+        self.setting.min_price = 0
+        self.l_stop_cnt = 0
+
+        self.onFirstOrder(0)
 
     # L-Stop 완료 되었 는지 확인
     def checkStopComplete(self):
@@ -332,7 +379,6 @@ class OrderTradeHTX:
                 l_stop_status = self.checkLongStopStatus()
                 if l_stop_status:
                     connect_db.releaseBreakStatus(self.user_num, self.symbol, 'htx', 1)
-                    self.onFirstOrder()
                     return
         time.sleep(self.schedule_period)
 
@@ -353,13 +399,16 @@ class OrderTradeHTX:
                 return
             else:
                 connect_db.releaseBreakStatus(self.user_num, self.symbol, 'htx', 1)
-                self.onFirstOrder()
                 return
         time.sleep(self.schedule_period)
 
-    def onFirstOrder(self):
+    def onFirstOrder(self, index):
         if self.setting.l_stop or self.setting.s_brake or self.setting.holding_status:
             return
+        if index == 0:
+            time.sleep(self.order_one_reset_time)
+        else:
+            time.sleep(self.order_two_reset_time)
         # sell, buy 방향의 모든 주문이 청산 완료 이면 새 주문 넣기
         sell_idx = self.setting.checkNextIndex(0, 'sell')
         if sell_idx == 0:
@@ -368,7 +417,10 @@ class OrderTradeHTX:
         if buy_idx == 0:
             self.run_thread(0, 'buy')
 
-    def run_thread(self, idx, direction, current_price=0, pre_price=0):
+    def run_thread(self, idx, direction, current_price=0):
+        status = self.setting.getOrderStatus(idx, direction)
+        if status > 0:
+            return
         try:
             self.swap_order = htx_swap_order.TradeSwapOrder(self.api_key, self.secret_key, self.symbol,
                                                             self.user_num, self.coin_num, self.dot_digit,
@@ -378,98 +430,125 @@ class OrderTradeHTX:
                 return
             if balance > 0:
                 connect_db.setUsersAmount(self.user_num, 'htx', utils.getRoundDotDigit(float(balance), 2))
-            if current_price == 0 or pre_price == 0:
-                current_price = connect_redis.getCoinCurrentPrice(self.rdb, 'htx', self.symbol, 'float')
-                if current_price == 0:
-                    return
-                # 이전 가격이 없는 경우 평균 가격 얻기
-                pre_price = connect_redis.getCoinMiddlePrice(self.rdb, 'htx', self.symbol)
-                if pre_price == 0:
-                    pre_price = current_price
+
             if idx == 0:
-                one_thread = threading.Thread(target=self.onCreateIsolatedTPSL, args=(idx, direction, balance, current_price, pre_price))
+                one_thread = threading.Thread(target=self.start_thread, args=(idx, direction, balance, current_price))
                 one_thread.start()
             else:
-                tow_thread = threading.Thread(target=self.onCreateIsolatedTPSL, args=(idx, direction, balance, current_price, pre_price))
+                tow_thread = threading.Thread(target=self.start_thread, args=(idx, direction, balance, current_price))
                 tow_thread.daemon = True
                 tow_thread.start()
         except Exception as e:
             print(f"HTX run_thread error : {e}")
             return
 
-    def getMinMaxPro(self, c_price):
-        max_price, min_price = connect_redis.getMaxMinPrice(self.rdb, 'htx', self.symbol)
-        pro = utils.getCurrentMinMaxProValue(max_price, min_price, c_price)
-        return pro
-
     # create trading order
-    def onCreateIsolatedTPSL(self, idx, direction, balance, current_price, pre_price):
-        if current_price == 0 or pre_price == 0:
-            return
-        if self.order_number == 0:
-            self.order_number = 1
+    def start_thread(self, idx, direction, balance, current_price):
+        is_next = True
+        if current_price == 0:
+            if self.setting.symbol_price == 0:
+                self.setting.symbol_price = connect_redis.getCoinCurrentPrice(self.rdb, 'htx', self.symbol, 'float')
+            current_price = self.setting.symbol_price
+            is_next = False
         amount = self.bet_limit * self.orderCounts[idx]
         price = 0
-        tp_price = 0
-        sl_price = 0
-        min_max_pro = self.getMinMaxPro(current_price)
         if direction == "sell":
-            base_price = (current_price + pre_price) / 2
-            price = current_price + base_price * ((self.rate_rev + min_max_pro) / 100) * self.strengths[idx]
-            tp_price = price - price * (self.rate_rev / 100) * (1 + self.strengths[idx]) / 2
-            sl_price = price + price * (self.rate_liq / 100)
-        elif direction == "buy":
-            base_price = (current_price + pre_price) / 2
-            price = current_price - base_price * ((self.rate_rev + min_max_pro) / 100) * self.strengths[idx]
-            tp_price = price + price * (self.rate_rev / 100) * (1 + self.strengths[idx]) / 2
-            sl_price = price - price * (self.rate_liq / 100)
-
-        _c_price = utils.getRoundDotDigit(price, self.dot_digit)  # 새 주문 가격
-        _p_price = utils.getRoundDotDigit(pre_price, self.dot_digit)  # 이전 주문 가격
-
-        if _c_price == _p_price:
-            # 이전 가격과 같은 가격 이면 다시 계산
-            time.sleep(10)
-            r_price = connect_redis.getCoinCurrentPrice(self.rdb, 'htx', self.symbol, 'float')
-            self.onCreateIsolatedTPSL(idx, direction, balance, r_price, pre_price)
-        else:
-            state, order_id, tp, sl = self.swap_order.onTradingSwapOrder(direction, idx, balance, amount, current_price, self.leverage, self.bet_limit,
-                                                                         price, tp_price, sl_price, self.rate_rev, self.rate_liq, self.brokerID)
-            if state:
-                self.live_run = htx_trading_run.RunTrading(self.api_key, self.secret_key, self.symbol, idx, direction,
-                                                           self.param, self.w_param, self.rdb, price, order_id,
-                                                           self.setting, self, self.user_num)
-                self.live_run.checkOrderExecution(tp, sl, amount)
-                self.live_instances.append(self.live_run)
+            if is_next is False:
+                price = current_price - current_price * (self.rate_liq / 100) * self.strengths[idx]
             else:
-                self.run_thread(idx, direction)
+                price = current_price
+        elif direction == "buy":
+            if is_next is False:
+                price = current_price + current_price * (self.rate_liq / 100) * self.strengths[idx]
+            else:
+                price = current_price
+        if price > 0:
+            price = utils.getRoundDotDigit(price, self.dot_digit)
 
-    # S4가 주문 체결 된 상태 에서 B1이 존재 하지 않을 경우
-    # B4가 주문 체결 된 상태 에서 S1존재 하지 않을 경우
+            self.live_run = htx_trading_run.RunTrading(self.api_key, self.secret_key, self.symbol, idx, direction,
+                                                       self.param, self.w_param, self.rdb, price, self.swap_order,
+                                                       self.setting, self, self.user_num, self.auto_ctime, balance)
+            self.live_instances.append(self.live_run)
+            self.c_time = 0
+            self.is_service_start = True
+            self.live_run.checkOrderExecution(amount)
+
     def restartFirstOrder(self):
         if self.setting.l_stop or self.setting.s_brake or self.setting.holding_status:
             return
-        status_buy_0 = self.setting.getOrderStatus(0, 'buy')
-        status_sell_2 = self.setting.getOrderStatus(2, 'sell')
-        status_sell_3 = self.setting.getOrderStatus(3, 'sell')
-        if status_buy_0 == 0:
-            if (status_sell_2 == 4 or status_sell_2 == 6) and status_sell_3 <= 3:
-                self.is_one = True
-                time.sleep(300)
-                buy_idx = self.setting.checkNextIndex(0, 'buy')
-                if buy_idx == 0:
-                    self.run_thread(0, 'buy')
-                    self.is_one = False
-        status_sell_0 = self.setting.getOrderStatus(0, 'sell')
-        status_buy_2 = self.setting.getOrderStatus(2, 'buy')
-        status_buy_3 = self.setting.getOrderStatus(3, 'buy')
-        if status_sell_0 == 0:
-            if (status_buy_2 == 4 or status_buy_2 == 6) and status_buy_3 <= 3:
-                self.is_one = True
-                time.sleep(300)
-                sell_idx = self.setting.checkNextIndex(0, 'sell')
-                if sell_idx == 0:
-                    self.run_thread(0, 'sell')
-                    self.is_one = False
-        if self.is_one:
-            self.is_one = False
+        buy_idx = self.setting.checkNextIndex(0, 'buy')
+        if buy_idx == 0:
+            self.run_thread(0, 'buy')
+        sell_idx = self.setting.checkNextIndex(0, 'sell')
+        if sell_idx == 0:
+            self.run_thread(0, 'sell')
+
+    # B1, S1 주문가 비교
+    # B1의 주문가 가 S1의 주문가 보다 작으면 True
+    def getB1S1PriceCompare(self):
+        b1_price = self.setting.getOrderPrice(0, 'buy')
+        s1_price = self.setting.getOrderPrice(0, 'sell')
+
+        b1_status = self.setting.getOrderStatus(0, 'buy')
+        b2_status = self.setting.getOrderStatus(1, 'buy')
+        b3_status = self.setting.getOrderStatus(2, 'buy')
+        b4_status = self.setting.getOrderStatus(3, 'buy')
+        s1_status = self.setting.getOrderStatus(0, 'sell')
+        s2_status = self.setting.getOrderStatus(1, 'sell')
+        s3_status = self.setting.getOrderStatus(2, 'sell')
+        s4_status = self.setting.getOrderStatus(3, 'sell')
+
+        if b2_status == 6 or b3_status == 6 or b4_status == 6:
+            return False
+        if s2_status == 6 or s3_status == 6 or s4_status == 6:
+            return False
+        if b1_status == 6 and s1_status == 6:
+            if b1_price > 0 and s1_price > 0:
+                if b1_price < s1_price:
+                    return True
+        return False
+
+    # 자동 포지션 처리
+    def autoPositionProcess(self):
+        b1_price = self.setting.getOrderPrice(0, 'buy')
+        b1_comp = b1_price + b1_price * (self.rate_rev / 100)
+        s1_price = self.setting.getOrderPrice(0, 'sell')
+        s1_comp = s1_price - s1_price * (self.rate_rev / 100)
+        datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
+
+        b_force = False
+        if b1_price > 0:
+            if b1_comp <= self.setting.symbol_price:
+                b_force = True
+        if s1_price > 0:
+            if s1_comp >= self.setting.symbol_price:
+                b_force = True
+        print(
+            f"Auto Position Process : --{datetime}-- {self.symbol} b1={b1_comp}, s1={s1_comp}, c_price={self.setting.symbol_price}, b_force={b_force}")
+
+        if b_force:
+            print(f"OK Auton process !!!")
+            # 이미 포지션 된 주문 강제 청산
+            self.onCloseSymbolOrder(False)
+
+            self.setting.l_stop = False
+            self.setting.s_brake = False
+            self.setting.holding_status = False
+            self.sb_price = self.setting.symbol_price
+            self.s_brake_cnt = 0
+            self.s_brake_time = 0
+            self.l_stop_time = 0
+            self.setting.max_price = 0
+            self.setting.min_price = 0
+            self.l_stop_cnt = 0
+
+            self.onFirstOrder(1)
+
+    def closeOpenThread(self):
+        for i in range(0, 4):
+            buy_status = self.setting.getOrderStatus(i, 'buy')
+            if buy_status < 6:
+                self.setting.setStOrderStatus(i, 'complete', 'buy')
+            sell_status = self.setting.getOrderStatus(i, 'sell')
+            if sell_status < 6:
+                self.setting.setStOrderStatus(i, 'complete', 'sell')

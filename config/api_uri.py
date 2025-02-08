@@ -4,10 +4,6 @@ import hmac
 from datetime import datetime
 from urllib.parse import urlencode
 
-BIN_Uri = 'https://fapi.binance.com'
-BIN_Balance = '/fapi/v2/balance'  # 거래소 보유 금액 조회
-BIN_Order = '/fapi/v1/order'  # 선물 거래 주문 요청 및 취소
-
 HTX_Uri = 'api.hbdm.com'
 HTX_Balance = '/linear-swap-api/v3/unified_account_info'  # 거래소 보유 금액 조회
 HTX_Order = '/linear-swap-api/v1/swap_order'  # 새로운 주문 요청
@@ -20,6 +16,8 @@ HTX_CancelAllOrder = '/linear-swap-api/v1/swap_cancelall'  # 선물 거래 열�
 HTX_CloseTrigger = '/linear-swap-api/v1/swap_trigger_cancelall'  # 선물 거래 체결 된 주문 강제 청산
 HTX_PositionInfo = '/linear-swap-api/v1/swap_account_info'  # 선물 거래 포지션 정보
 HTX_ClosePosition = '/linear-swap-api/v1/swap_lightning_close_position'  # 선물 거래 체결 된 주문 강제 청산
+HTX_GetAccountType = '/linear-swap-api/v3/swap_unified_account_type'   # 계정 형태 알아 보기
+HTX_ChangeAccountType = '/linear-swap-api/v3/swap_switch_account_type'   # 계정 형태 변경 하기
 
 
 def setPostApiUrl(api_key, secret_key, method, endpoint):

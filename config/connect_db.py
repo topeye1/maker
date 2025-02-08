@@ -31,10 +31,6 @@ def setTradeOrder(data, types, status=1):
     maria_db.setTradeOrder(data, types, status)
 
 
-def getTradeOrderIds(order_id):
-    return maria_db.getTradeOrderIds(order_id)
-
-
 def getUnSaveTradeIds(user_num, market):
     return maria_db.getUnSaveTradeIds(user_num, market)
 
@@ -43,8 +39,8 @@ def getLiquidationClosedOrders(symbol, user_num, market, price, profit):
     return maria_db.getLiquidationClosedOrders(symbol, user_num, market, price, profit)
 
 
-def setUpdateOrder(data, types, where, user_num=0, symbol='', market='htx', make_price=0, profit_money=0, update_time=''):
-    return maria_db.updateTradeOrder(data, types, where, user_num, symbol, market, make_price, profit_money, update_time)
+def setUpdateOrder(data, types, where):
+    return maria_db.updateTradeOrder(data, types, where)
 
 
 """
@@ -81,8 +77,8 @@ def setOrderHoldingStatus(user_num, coin_num, market, status):
     maria_db.updateOrderHoldingStatus(user_num, coin_num, market, status)
 
 
-def setOrderClose(user_num, coin_num, market):
-    maria_db.updateOrderClose(user_num, coin_num, market)
+def setOrderClose(user_num, coin_num, market, isRun):
+    maria_db.updateOrderClose(user_num, coin_num, market, isRun)
 
 
 def checkDoubleOrder(user_num, market, symbol, price, datetime):

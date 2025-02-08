@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+import json
 import time
 from datetime import datetime
 from urllib.parse import urlencode
@@ -94,11 +95,95 @@ def getBinanceFutureBalance(api_key, secret_key):
         return 0
 
 
+def getAccountType(api_key, secret_key):
+    # 시간 생성
+    timestamp = str(datetime.utcnow().isoformat())[0:19]
+    params = urlencode({'AccessKeyId': api_key,
+                        'SignatureMethod': 'HmacSHA256',
+                        'SignatureVersion': '2',
+                        'Timestamp': timestamp
+                        })
+    # 서명 생성
+    method = "POST"
+    endpoint = '/linear-swap-api/v3/swap_unified_account_type'
+    base_uri = 'api.hbdm.com'
+
+    pre_signed_text = method + '\n' + base_uri + '\n' + endpoint + '\n' + params
+    hash_code = hmac.new(secret_key.encode(), pre_signed_text.encode(), hashlib.sha256).digest()
+    signature = urlencode({'Signature': base64.b64encode(hash_code).decode()})
+    url = 'https://' + base_uri + endpoint + '?' + params + '&' + signature
+    urllib3.disable_warnings()
+    response = requests.request(method, url, verify=False)
+
+    # 응답 처리
+    if response.status_code == 200:
+        resp = response.json()
+        try:
+            if resp['code'] == 200:
+                data = resp['data']
+                account_type = data['account_type']
+                return account_type
+        except Exception as e:
+            print(e)
+            return 0
+    else:
+        print("Failed to url '/linear-swap-api/v3/unified_account_info' :", response.text)
+        return 0
+
+
+def setAccountType(api_key, secret_key):
+    # 시간 생성
+    timestamp = str(datetime.utcnow().isoformat())[0:19]
+    params = urlencode({'AccessKeyId': api_key,
+                        'SignatureMethod': 'HmacSHA256',
+                        'SignatureVersion': '2',
+                        'Timestamp': timestamp
+                        })
+    # 서명 생성
+    method = "POST"
+    endpoint = '/linear-swap-api/v3/swap_switch_account_type'
+    base_uri = 'api.hbdm.com'
+
+    pre_signed_text = method + '\n' + base_uri + '\n' + endpoint + '\n' + params
+    hash_code = hmac.new(secret_key.encode(), pre_signed_text.encode(), hashlib.sha256).digest()
+    signature = urlencode({'Signature': base64.b64encode(hash_code).decode()})
+    url = 'https://' + base_uri + endpoint + '?' + params + '&' + signature
+
+    datas = {
+        "account_type": 2
+    }
+    body = json.dumps(datas, separators=(',', ':'))
+    headers = {
+        'Content-Type': 'application/json',
+    }
+
+    urllib3.disable_warnings()
+    response = requests.request(method, url, headers=headers, data=body, verify=False)
+
+    # 응답 처리
+    if response.status_code == 200:
+        resp = response.json()
+        try:
+            if resp['code'] == 200:
+                data = resp['data']
+                account_type = data['account_type']
+                return account_type
+        except Exception as e:
+            print(e)
+            return 0
+    else:
+        print("Failed to url '/linear-swap-api/v3/unified_account_info' :", response.text)
+        return 0
+
+
 def getUserAmount():
     keys = connect_db.getApiKeys()
     for key in keys:
         total_amount = 0
         if key['market'] == 'htx':
+            account_type = getAccountType(key['api_key'], key['secret_key'])
+            if account_type > 0 and account_type == 1:
+                setAccountType(key['api_key'], key['secret_key'])
             total_amount = getHoubiFutureBalance(key['api_key'], key['secret_key'])
         # else:
         #    total_amount = getBinanceFutureBalance(key['api_key'], key['secret_key'])
