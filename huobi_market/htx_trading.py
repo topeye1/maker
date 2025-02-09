@@ -275,18 +275,14 @@ class OrderTradeHTX:
                     del utils.stop_htx_info[i]
                 i += 1
 
+            datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"{datetime} ---Force CloseSymbolOrder--- : {self.symbol}, user={self.user_num}")
             self.onCloseSymbolOrder(True)
             # 주문의 실행 상태 0 (stop 상태)
             connect_db.setCloseOrderStatus(self.symbol, self.user_num, 'htx')
             # 처리 안된 포지션 삭제 하기
             # connect_db.delCancelPosition(self.symbol, self.user_num, 'htx')
 
-            """
-            # 청산 후 보관 되지 않은 주문 보관 하기
-            unclear_ids = connect_db.getUnSaveTradeIds(self.user_num, 'htx')
-            if len(unclear_ids) > 0:
-                htx_unsave_order.unSavePositionOrders(self.api_key, self.secret_key, self.user_num, unclear_ids)
-            """
             self.is_all_close = False
             self.shutDownSchedule()
             self.del_run()
@@ -301,8 +297,7 @@ class OrderTradeHTX:
             sell_id = self.setting.getOrderID(i, 'sell')
             if sell_id != '':
                 sell_ids.append(sell_id)
-        datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"   {datetime} ---onCloseSymbolOrder : {self.symbol}, sell_ids={sell_ids} ")
+        print(f"   {self.symbol}, sell_ids={sell_ids}")
         sell_close_id = cancel_order.onClosePositionOrder(self.user_num, self.symbol, 'sell', sell_ids)
         if str(sell_close_id) != '':
             for i in range(0, len(sell_ids)):
@@ -321,8 +316,7 @@ class OrderTradeHTX:
             buy_id = self.setting.getOrderID(i, 'buy')
             if buy_id != '':
                 buy_ids.append(buy_id)
-        datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"   {datetime} ---onCloseSymbolOrder : {self.symbol}, buy_ids={buy_ids} ")
+        print(f"   {self.symbol}, buy_ids={buy_ids}")
         buy_close_id = cancel_order.onClosePositionOrder(self.user_num, self.symbol, 'buy', buy_ids)
         if str(buy_close_id) != '':
             for i in range(0, len(buy_ids)):
@@ -350,6 +344,8 @@ class OrderTradeHTX:
             return
         self.reset_time = 0
         # 이미 포지션 된 주문 강제 청산
+        datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"{datetime} ---if b1 < s1 , restart symbol order--- : {self.symbol}, user={self.user_num}")
         self.onCloseSymbolOrder(False)
 
         self.setting.l_stop = False
@@ -514,7 +510,6 @@ class OrderTradeHTX:
         b1_comp = b1_price + b1_price * (self.rate_rev / 100)
         s1_price = self.setting.getOrderPrice(0, 'sell')
         s1_comp = s1_price - s1_price * (self.rate_rev / 100)
-        datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
 
         b_force = False
         if b1_price > 0:
@@ -523,11 +518,10 @@ class OrderTradeHTX:
         if s1_price > 0:
             if s1_comp >= self.setting.symbol_price:
                 b_force = True
-        print(
-            f"Auto Position Process : --{datetime}-- {self.symbol} b1={b1_comp}, s1={s1_comp}, c_price={self.setting.symbol_price}, b_force={b_force}")
 
         if b_force:
-            print(f"OK Auton process !!!")
+            datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"Auto Position Process : --{datetime}-- {self.symbol},  user={self.user_num}")
             # 이미 포지션 된 주문 강제 청산
             self.onCloseSymbolOrder(False)
 

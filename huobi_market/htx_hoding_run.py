@@ -2,7 +2,7 @@ import threading
 
 import utils
 from config import connect_db, connect_redis
-from huobi_market import htx_swap_order, htx_order_info, htx_order_history
+from huobi_market import htx_swap_order, htx_order_info
 from huobi_market.htx_balance import getHuobiFutureBalance
 
 

@@ -48,8 +48,6 @@ class RunTrading:
         self.order_price = price
         self.tradingCls = tradingCls
         self.setting = setting
-        self.arr_prices = []
-        self.avr_price = 0
         self.user_num = user_num
         # scheduler
         self.check_scheduler = None
@@ -57,22 +55,13 @@ class RunTrading:
         self.scheduler_time = 3
 
         self.order_info = None
-        self.close_history = None
         self.checkOrderCnt = 0
-        self.cancelOrderCnt = 0
         self.cancel_time = 0
-        self.close_time = 0
         self.is_position = False
-        self.close_order_id = ''
-        self.close_status = 0
-        self.offset = ''
-        self.search_time = 0
-        self.is_stop = False
         self.next_price = 0
         self.amount = 0
         self.balance = balance
         self.swap_order = swap_order
-        self.reset_time = 0
         # Broker ID
         self.brokerID = w_param['brokerID']
         self.order_info = htx_order_info.HuobiOrderInfo(self.api_key, self.secret_key, self.symbol)
@@ -81,7 +70,7 @@ class RunTrading:
         self.close_cnt = 0
 
     def __del__(self):
-        print(f"htx_trading_run delete : {self.symbol}-{self.direction} {self.idx}")
+        print(f"htx_trading_run delete : {self.symbol}-{self.direction} {self.idx}, user={self.user_num}")
 
     def run_reorder(self, idx, direction, price=0):
         is_status = self.setting.getRunStatus(idx, direction)
