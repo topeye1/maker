@@ -67,10 +67,17 @@ class RunTrading:
         self.order_info = htx_order_info.HuobiOrderInfo(self.api_key, self.secret_key, self.symbol)
 
         self.class_status = 0
-        self.close_cnt = 0
 
     def __del__(self):
-        print(f"htx_trading_run delete : {self.symbol}-{self.direction} {self.idx}, user={self.user_num}")
+        self.check_scheduler = None
+        self.run_scheduler = False
+        self.order_info = None
+        self.checkOrderCnt = 0
+        self.cancel_time = 0
+        self.is_position = False
+        self.next_price = 0
+        self.amount = 0
+        self.class_status = 0
 
     def run_reorder(self, idx, direction, price=0):
         is_status = self.setting.getRunStatus(idx, direction)
@@ -328,10 +335,11 @@ class RunTrading:
             close_side = "sell"
         profit = utils.getRoundDotDigit(profit, 6)
         make_money = order_money + profit
-        b_cl = self.swap_order.onTradingSwapCloseOrder(self.symbol, close_side, order_id, volume, close_price, make_money, profit, self.leverage, self.setting.symbol_price, self.brokerID)
+        b_cl, res = self.swap_order.onTradingSwapCloseOrder(self.symbol, close_side, order_id, volume, close_price, make_money, profit, self.leverage, self.setting.symbol_price, self.brokerID)
         # 주문 서비스 종료
-        if b_cl or self.close_cnt > 2:
-            self.close_cnt = 0
+        if res == 1:
+            if b_cl is False:
+                self.swap_order.saveClosedOrderInfo(self.symbol, order_id, order_id, close_price, make_money, profit)
             self.class_status = 2
             self.shutDownCheckSchedule()
             self.del_run()
@@ -343,7 +351,6 @@ class RunTrading:
                     self.setting.setRunStatus(i, self.direction, 0)
                     self.setting.setOrderStatus(i, self.direction, 0)
         else:
-            self.close_cnt += 1
             time.sleep(10)
             self.closeSLOrders()
 

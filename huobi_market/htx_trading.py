@@ -55,6 +55,10 @@ class OrderTradeHTX:
         self.s_brake_rate = float(w_param['w9'])
         # S-Break 지속 시간(분)
         self.s_brake_delay_time = int(w_param['w10']) * 60
+        # S-Break 재시작 시간(분)
+        self.s_brake_restart_time = int(w_param['w11']) * 60
+        # S-Break 선택 정보
+        self.s_brake_sel = int(w_param['w12'])
 
         self.l_stop_time = 0
         self.s_brake_time = 0
@@ -167,7 +171,7 @@ class OrderTradeHTX:
 
                 # B1, S1의 주문이 존재 하지 않을 경우
                 if self.is_service_start:
-                    work7 = executor.submit(self.restartFirstOrder)
+                    work7 = executor.submit(self.setFirstOrder)
                     works.append(work7)
 
                 # 자동 청산 처리
@@ -217,12 +221,17 @@ class OrderTradeHTX:
         """
         brake_rate = ((self.setting.symbol_price - self.sb_price) / self.sb_price) * 100
         if abs(brake_rate) >= self.s_brake_rate and self.setting.s_brake is False:
-            self.setting.s_brake = True
-            self.closeOpenThread()
-            if self.setting.l_stop:
-                connect_db.changeBreakStatus(self.user_num, self.symbol, 'htx', 4)
+            if self.s_brake_sel == 1:
+                self.setting.s_brake = True
+                self.closeOpenThread()
+                if self.setting.l_stop:
+                    connect_db.changeBreakStatus(self.user_num, self.symbol, 'htx', 4)
+                else:
+                    connect_db.changeBreakStatus(self.user_num, self.symbol, 'htx', 3)
             else:
-                connect_db.changeBreakStatus(self.user_num, self.symbol, 'htx', 3)
+                datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
+                print(f"{datetime} ---checkShortBreak --- : {self.symbol}, user={self.user_num}")
+                self.restartSymbolOrder(False, 2)
         if self.s_brake_cnt * self.break_check_time >= self.s_brake_base_time:
             self.sb_price = self.setting.symbol_price
             self.s_brake_cnt = 0
@@ -265,8 +274,6 @@ class OrderTradeHTX:
             self.stop_time = 0
             self.brake_time = 0
             self.setting.is_close = True
-            self.setting.max_price = 0
-            self.setting.min_price = 0
             self.is_service_start = False
 
             i = 0
@@ -275,8 +282,6 @@ class OrderTradeHTX:
                     del utils.stop_htx_info[i]
                 i += 1
 
-            datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
-            print(f"{datetime} ---Force CloseSymbolOrder--- : {self.symbol}, user={self.user_num}")
             self.onCloseSymbolOrder(True)
             # 주문의 실행 상태 0 (stop 상태)
             connect_db.setCloseOrderStatus(self.symbol, self.user_num, 'htx')
@@ -346,20 +351,7 @@ class OrderTradeHTX:
         # 이미 포지션 된 주문 강제 청산
         datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
         print(f"{datetime} ---if b1 < s1 , restart symbol order--- : {self.symbol}, user={self.user_num}")
-        self.onCloseSymbolOrder(False)
-
-        self.setting.l_stop = False
-        self.setting.s_brake = False
-        self.setting.holding_status = False
-        self.sb_price = self.setting.symbol_price
-        self.s_brake_cnt = 0
-        self.s_brake_time = 0
-        self.l_stop_time = 0
-        self.setting.max_price = 0
-        self.setting.min_price = 0
-        self.l_stop_cnt = 0
-
-        self.onFirstOrder(0)
+        self.restartSymbolOrder(False, 0)
 
     # L-Stop 완료 되었 는지 확인
     def checkStopComplete(self):
@@ -397,21 +389,6 @@ class OrderTradeHTX:
                 connect_db.releaseBreakStatus(self.user_num, self.symbol, 'htx', 1)
                 return
         time.sleep(self.schedule_period)
-
-    def onFirstOrder(self, index):
-        if self.setting.l_stop or self.setting.s_brake or self.setting.holding_status:
-            return
-        if index == 0:
-            time.sleep(self.order_one_reset_time)
-        else:
-            time.sleep(self.order_two_reset_time)
-        # sell, buy 방향의 모든 주문이 청산 완료 이면 새 주문 넣기
-        sell_idx = self.setting.checkNextIndex(0, 'sell')
-        if sell_idx == 0:
-            self.run_thread(0, 'sell')
-        buy_idx = self.setting.checkNextIndex(0, 'buy')
-        if buy_idx == 0:
-            self.run_thread(0, 'buy')
 
     def run_thread(self, idx, direction, current_price=0):
         status = self.setting.getOrderStatus(idx, direction)
@@ -469,7 +446,7 @@ class OrderTradeHTX:
             self.is_service_start = True
             self.live_run.checkOrderExecution(amount)
 
-    def restartFirstOrder(self):
+    def setFirstOrder(self):
         if self.setting.l_stop or self.setting.s_brake or self.setting.holding_status:
             return
         buy_idx = self.setting.checkNextIndex(0, 'buy')
@@ -522,21 +499,7 @@ class OrderTradeHTX:
         if b_force:
             datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
             print(f"Auto Position Process : --{datetime}-- {self.symbol},  user={self.user_num}")
-            # 이미 포지션 된 주문 강제 청산
-            self.onCloseSymbolOrder(False)
-
-            self.setting.l_stop = False
-            self.setting.s_brake = False
-            self.setting.holding_status = False
-            self.sb_price = self.setting.symbol_price
-            self.s_brake_cnt = 0
-            self.s_brake_time = 0
-            self.l_stop_time = 0
-            self.setting.max_price = 0
-            self.setting.min_price = 0
-            self.l_stop_cnt = 0
-
-            self.onFirstOrder(1)
+            self.restartSymbolOrder(False, 1)
 
     def closeOpenThread(self):
         for i in range(0, 4):
@@ -546,3 +509,26 @@ class OrderTradeHTX:
             sell_status = self.setting.getOrderStatus(i, 'sell')
             if sell_status < 6:
                 self.setting.setStOrderStatus(i, 'complete', 'sell')
+
+    def restartSymbolOrder(self, b_close, sleep_idx):
+        self.onCloseSymbolOrder(b_close)
+
+        self.sb_price = self.setting.symbol_price
+        self.s_brake_cnt = 0
+        self.s_brake_time = 0
+        self.l_stop_time = 0
+        self.l_stop_cnt = 0
+
+        if sleep_idx == 0:
+            time.sleep(self.order_one_reset_time)
+        elif sleep_idx == 1:
+            time.sleep(self.order_two_reset_time)
+        elif sleep_idx == 2:
+            time.sleep(self.s_brake_restart_time)
+        # sell, buy 방향의 모든 주문이 청산 완료 이면 새 주문 넣기
+        sell_idx = self.setting.checkNextIndex(0, 'sell')
+        if sell_idx == 0:
+            self.run_thread(0, 'sell')
+        buy_idx = self.setting.checkNextIndex(0, 'buy')
+        if buy_idx == 0:
+            self.run_thread(0, 'buy')

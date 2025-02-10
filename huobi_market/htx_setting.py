@@ -95,6 +95,12 @@ class HuobiSetting:
         self.BUY_MONEY = [0, 0, 0, 0, 0]
         self.SELL_NEXT = [0, 0, 0, 0, 0]
         self.BUY_NEXT = [0, 0, 0, 0, 0]
+        self.l_stop = False
+        self.s_brake = False
+        self.holding_status = False
+        self.is_close = False
+        self.max_price = 0
+        self.min_price = 0
 
     # 다음 주문 상태 얻기
     def getNextStatus(self, idx, direction):

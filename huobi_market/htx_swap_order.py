@@ -153,7 +153,6 @@ class TradeSwapOrder:
         headers = {
             'Content-Type': 'application/json',
         }
-
         try:
             urllib3.disable_warnings()
             # API 호출
@@ -164,16 +163,16 @@ class TradeSwapOrder:
                     data = resp['data']
                     close_id = data['order_id_str']
                     res = self.saveClosedOrderInfo(symbol, order_id, close_id, sl_price, make_money, profit, True)
-                    return True
+                    return True, 1
                 else:
                     print(f"onTradingSwapCloseOrder Error response close order : {self.user_num} {symbol} : {response.text}")
-                    return False
+                    return False, 1
             else:
                 print(f"onTradingSwapCloseOrder Failed to close order url '/linear-swap-api/v1/swap_order' : {self.user_num} {symbol} : {response.text}")
-                return False
+                return False, 0
         except Exception as e:
             print(f"onTradingSwapCloseOrder Exception error : {e}")
-            return False
+            return False, 0
 
     def saveClosedOrderInfo(self, symbol, order_id, close_id, sl_price, make_money, profit, is_sl=False):
         update_time = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
