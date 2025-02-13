@@ -18,8 +18,8 @@ class RunTrading:
         self.w_param = w_param
         self.auto_ctime = auto_ctime
 
-        # 선 주문 취소 시간(분)
-        self.first_cancel_time = int(w_param['m5']) * 60
+        # 선 주문 취소 시간(초)
+        self.first_cancel_time = int(w_param['m5'])
         # 다음 주문 지연 시간(초)
         self.order_next_time = int(w_param['m8'])
         # param [m7] s1, b1 재주문 지연 시간(초)
@@ -31,9 +31,7 @@ class RunTrading:
         # 주문 강도
         self.strengths = [float(w_param['m1']), float(w_param['m2']), float(w_param['m3']), float(w_param['m4'])]
         # 재 주문 범위
-        self.reorder_range = int(w_param['m16'])
-        # 체결이 일어 나지 않을 경우 주문 취소 시간(분)['m19']
-        self.order_restart_time = int(w_param['m19']) * 60
+        # self.reorder_range = int(w_param['m16'])
         self.param = param
         self.rate_rev = float(param['rate_rev'])
         self.rate_liq = float(param['rate_liq'])
@@ -69,15 +67,7 @@ class RunTrading:
         self.class_status = 0
 
     def __del__(self):
-        self.check_scheduler = None
-        self.run_scheduler = False
-        self.order_info = None
-        self.checkOrderCnt = 0
-        self.cancel_time = 0
-        self.is_position = False
-        self.next_price = 0
-        self.amount = 0
-        self.class_status = 0
+        print(f"HTX - delete run : {self.symbol}-{self.direction} {self.idx}")
 
     def run_reorder(self, idx, direction, price=0):
         is_status = self.setting.getRunStatus(idx, direction)
@@ -117,7 +107,7 @@ class RunTrading:
                     self.del_run()
                     return
 
-                # 30초 간격 으로 주문 체결 및 청산 상태 확인
+                # 30초 간격 으로 주문 청산 상태 확인
                 if self.checkOrderCnt >= 30:
                     work1 = executor.submit(self.checkTradeOrder)
                     works.append(work1)
@@ -125,7 +115,7 @@ class RunTrading:
                 else:
                     self.checkOrderCnt += self.scheduler_time
 
-                # [m5]100분후 체결 되지 않은 주문 취소
+                # [m5]체결 되지 않은 주문 취소
                 if run_status == 1 and pos_status < 6 and self.idx == 0:
                     if self.cancel_time >= self.first_cancel_time:
                         work2 = executor.submit(self.cancelFirstOrder)
@@ -203,26 +193,37 @@ class RunTrading:
                                                                      self.bet_limit,
                                                                      price, self.rate_rev, self.rate_liq, self.brokerID)
         if state:
+            datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"onOpenOrderPosition : --{datetime}-- user={self.user_num}, {self.symbol}-{self.direction} {self.idx},  order_id={order_id}")
+            if self.idx == 0:
+                # 포지션 된 주문의 반대 방향은 주문 취소 한다
+                self.cancelReverseOrder()
+
             # 마켓 주문 가격 얻기
             order_price, order_money = self.order_info.onCheckOrderInfo(order_id, self.user_num)
 
             tp_price = 0
             sl_price = 0
+            rate_liq = self.rate_liq
+            if self.idx > 0:
+                rate_liq = self.rate_liq / 2
+
             if self.direction == "sell":
                 tp_price = utils.getRoundDotDigit(
                     order_price - order_price * (self.rate_rev / 100) * (1 + self.strengths[self.idx]) / 2,
                     self.dot_digit)
-                sl_price = utils.getRoundDotDigit(order_price + order_price * (self.rate_liq / 100), self.dot_digit)
+                sl_price = utils.getRoundDotDigit(order_price + order_price * (rate_liq / 100), self.dot_digit)
             elif self.direction == "buy":
                 tp_price = utils.getRoundDotDigit(
                     order_price + order_price * (self.rate_rev / 100) * (1 + self.strengths[self.idx]) / 2,
                     self.dot_digit)
-                sl_price = utils.getRoundDotDigit(order_price - order_price * (self.rate_liq / 100), self.dot_digit)
+                sl_price = utils.getRoundDotDigit(order_price - order_price * (rate_liq / 100), self.dot_digit)
             # tp/sl 보관
             self.order_info.onKeep_TPSL_Price(order_id, self.user_num, tp_price, sl_price)
             self.setting.setStOrderStatus(self.idx, 'create', self.direction, order_price, tp_price, sl_price,
                                           self.amount, volume, order_money, order_id)
         else:
+            print(f"onOpenOrderPosition : state={state}")
             self.class_status = 2
             self.shutDownCheckSchedule()
             self.del_run()
@@ -247,17 +248,20 @@ class RunTrading:
                 b_complete = True
 
         if b_complete:
-            # 주문 닫기
-            self.closeSLOrders()
+            # 주문 닫고 새 주문 넣기
+            datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"SL Close Order : --{datetime}-- user={self.user_num}, {self.symbol}-{self.direction} {self.idx}, sl={sl}, symbol_price={self.setting.symbol_price}")
+            self.tradingCls.restartSymbolOrder(False, 0)
+            # self.closeSLOrders()
             # 재 주문 넣기
-            self.setReOrder()
+            # self.setReOrder()
         else:
             # 다음 주문 넣기
             next_status = self.setting.getNextStatus(self.idx, self.direction)
             is_next_price = self.calcNextOrderPrice()
             if is_next_price and next_status == 0:
                 self.setNextOrder()
-
+    """
     # 재주문 넣기
     def setReOrder(self):
         # break 상태 나 holding 상태 이면 주문을 넣지 않는다.
@@ -266,7 +270,7 @@ class RunTrading:
         if self.idx == 0:
             self.sleep_time(self.idx)
             self.run_reorder(self.idx, self.direction)
-
+    """
     # 다음 주문 넣기
     def setNextOrder(self):
         # break 상태 나 holding 상태 이면 주문을 넣지 않는다.
@@ -309,14 +313,19 @@ class RunTrading:
 
     # 선 주문 취소
     def cancelFirstOrder(self):
-        self.class_status = 2
-        self.shutDownCheckSchedule()
-        self.del_run()
-        self.setting.setStOrderStatus(self.idx, 'complete', self.direction)
-        self.sleep_time(self.idx)
-        self.run_reorder(self.idx, self.direction)
+        print(f"cancelFirstOrder : {self.symbol}-{self.direction} {self.idx}")
+        # self.sleep_time(self.idx)
+        run = self.setting.getRunStatus(0, self.direction)
+        pos = self.setting.getOrderStatus(0, self.direction)
+        if run == 1 and pos < 6:
+            self.class_status = 2
+            self.shutDownCheckSchedule()
+            self.del_run()
+            self.setting.setStOrderStatus(self.idx, 'complete', self.direction)
+            self.run_reorder(self.idx, self.direction)
 
     # SL 가격 으로 완료 된 주문 끝내기
+    """
     def closeSLOrders(self):
         volume = self.setting.getVolume(self.idx, self.direction)
         order_money = self.setting.getOrderMoney(self.idx, self.direction)
@@ -353,6 +362,20 @@ class RunTrading:
         else:
             time.sleep(10)
             self.closeSLOrders()
+    """
+    # 반대 주문 취소
+    def cancelReverseOrder(self):
+        close_side = "buy"
+        if self.direction == "sell":
+            close_side = "buy"
+        elif self.direction == "buy":
+            close_side = "sell"
+        run = self.setting.getRunStatus(0, close_side)
+        pos = self.setting.getOrderStatus(0, close_side)
+        if run == 1 and pos < 6:
+            self.setting.setRunStatus(0, close_side, 0)
+            self.setting.setOrderStatus(0, close_side, 0)
+            print(f"      cancelReverseOrder : Positioned Order={self.symbol}-{self.direction}, Cancel Order={self.symbol}-{close_side}")
 
     # Holding 상태 확인
     def checkHoldingStatus(self):

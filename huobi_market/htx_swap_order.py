@@ -131,9 +131,6 @@ class TradeSwapOrder:
         endpoint = config.api_uri.HTX_Order
         API_URL = config.api_uri.setPostApiUrl(self.api_key, self.secret_key, method, endpoint)
 
-        print(
-            f"onTradingSwapCloseOrder : {self.user_num}, {symbol}-{direction}, volume={volume}, order_price={order_price}, make_money={make_money}, profit={profit}, sl_price={sl_price}")
-
         order_volume = int(volume)
         str_symbol = utils.convertSymbolName(symbol)
 

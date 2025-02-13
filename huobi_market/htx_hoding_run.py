@@ -54,7 +54,6 @@ class HoldingOrderTradeHTX:
             if price == 0:
                 return
 
-            print(f"onOpenHoldingOrderPosition : {self.symbol}-{direction}, BUY_AMOUNT={self.setting.BUY_AMOUNT}, SELL_AMOUNT={self.setting.SELL_AMOUNT}")
             amount = 0
             if direction == "sell":
                 for buy_amount in self.setting.BUY_AMOUNT:
@@ -69,7 +68,6 @@ class HoldingOrderTradeHTX:
             if float(self.setting.symbol_price) > 0 and amount > 0:
                 state, order_id, volume, order_money = self.swap_order.onTradingSwapOrder(direction, idx, balance, amount, float(self.setting.symbol_price), self.leverage, self.bet_limit,
                                                                                           price, self.rate_rev, self.rate_liq, self.brokerID, self.coin_num)
-                print(f"Holding order : {self.symbol} {direction}-{idx}, state={state}, order_id={order_id}, volume={volume}, amount={amount}, order_money={order_money}")
                 if state:
                     # 마켓 주문 가격 얻기
                     order_price, order_money = self.order_info.onCheckOrderInfo(order_id, self.user_num)

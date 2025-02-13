@@ -149,9 +149,7 @@ class MariaDB:
             query = f"SELECT count(user_num) as cnt FROM tbl_trade_order WHERE "
             query += f"symbol='{symbol}' AND user_num={user_num} AND market='{market}' "
             query += f"AND make_price='{price}' AND profit_money='{profit}' "
-            print(f"   query={query}")
             rows = self.select_sql(query=query)
-            print(f"   rows={rows}")
             if rows is not None:
                 cnt = 0
                 for row in rows:

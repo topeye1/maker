@@ -33,7 +33,7 @@ class OrderTradeHTX:
         # param [m10] s2~s4, b2~b4 재주문 지연 시간(초)
         self.order_two_reset_time = int(w_param['m10'])
         # 체결이 일어 나지 않을 경우 주문 취소 시간(분)['m19']
-        self.order_restart_time = int(w_param['m19']) * 60
+        # self.order_restart_time = int(w_param['m19']) * 60
         # 주문 강도
         self.strengths = [float(w_param['m1']), float(w_param['m2']), float(w_param['m3']), float(w_param['m4'])]
         # 주문 수량
@@ -80,12 +80,12 @@ class OrderTradeHTX:
         self.schedule_period = 3
         self.onTradingScheduler()
         self.live_instances = []
-        self.reset_time = 0
+        # self.reset_time = 0
         self.is_all_close = False
         self.stop_time = 0
         self.brake_time = 0
         self.c_time = 0
-        self.is_service_start = False
+        # self.is_service_start = False
 
     def del_run(self):
         for instance in self.live_instances:
@@ -130,6 +130,7 @@ class OrderTradeHTX:
                 works.append(work1)
 
                 # 포지션 된 주문이 존재 하는지 체크
+                """
                 if self.is_all_close is False:
                     # B1가격 < S1가격 이면서 거래 Reset 대기 시간을 경과 하면
                     if self.order_restart_time > 0:
@@ -141,7 +142,7 @@ class OrderTradeHTX:
                                 works.append(work2)
                         else:
                             self.reset_time += self.schedule_period
-
+                """
                 # S-Break 급등, 급락 확인
                 if self.s_brake_time >= self.break_check_time:
                     work3 = executor.submit(self.checkShortBreak)
@@ -168,12 +169,12 @@ class OrderTradeHTX:
                     # S-Break 이 완료 되었 는지 확인
                     work6 = executor.submit(self.checkBrakeComplete)
                     works.append(work6)
-
+                """
                 # B1, S1의 주문이 존재 하지 않을 경우
                 if self.is_service_start:
                     work7 = executor.submit(self.setFirstOrder)
                     works.append(work7)
-
+                """
                 # 자동 청산 처리
                 if self.c_time < self.auto_ctime:
                     self.c_time += self.schedule_period
@@ -229,8 +230,6 @@ class OrderTradeHTX:
                 else:
                     connect_db.changeBreakStatus(self.user_num, self.symbol, 'htx', 3)
             else:
-                datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
-                print(f"{datetime} ---checkShortBreak --- : {self.symbol}, user={self.user_num}")
                 self.restartSymbolOrder(False, 2)
         if self.s_brake_cnt * self.break_check_time >= self.s_brake_base_time:
             self.sb_price = self.setting.symbol_price
@@ -244,6 +243,9 @@ class OrderTradeHTX:
         if pos_status:
             return
         """
+        # L-Stop 등락율 0 이면 급등 급락 체크 안 한다.
+        if self.l_stop_rate == 0:
+            return
         stop_rate = ((self.setting.max_price - self.setting.min_price) / self.setting.symbol_price) * 100
         if abs(stop_rate) >= self.l_stop_rate and self.setting.l_stop is False:
             self.setting.l_stop = True
@@ -274,7 +276,7 @@ class OrderTradeHTX:
             self.stop_time = 0
             self.brake_time = 0
             self.setting.is_close = True
-            self.is_service_start = False
+            # self.is_service_start = False
 
             i = 0
             for stop_htx in utils.stop_htx_info:
@@ -343,16 +345,15 @@ class OrderTradeHTX:
         self.setting.initParams()
 
     # ['m19'](1시간) 시간 동안 체결이 일어 나지 않을 경우 주문 취소, 새 주문 넣기
+    """
     def resetOrder(self):
         # brake 된 상태
         if self.setting.s_brake or self.setting.l_stop or self.setting.holding_status:
             return
         self.reset_time = 0
         # 이미 포지션 된 주문 강제 청산
-        datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"{datetime} ---if b1 < s1 , restart symbol order--- : {self.symbol}, user={self.user_num}")
         self.restartSymbolOrder(False, 0)
-
+    """
     # L-Stop 완료 되었 는지 확인
     def checkStopComplete(self):
         self.stop_time += self.schedule_period
@@ -443,21 +444,26 @@ class OrderTradeHTX:
                                                        self.setting, self, self.user_num, self.auto_ctime, balance)
             self.live_instances.append(self.live_run)
             self.c_time = 0
-            self.is_service_start = True
+            # self.is_service_start = True
             self.live_run.checkOrderExecution(amount)
-
+    """
     def setFirstOrder(self):
         if self.setting.l_stop or self.setting.s_brake or self.setting.holding_status:
             return
         buy_idx = self.setting.checkNextIndex(0, 'buy')
         if buy_idx == 0:
-            self.run_thread(0, 'buy')
+            sell_status = self.setting.getOrderStatus(0, 'sell')
+            if sell_status < 6:
+                self.run_thread(0, 'buy')
         sell_idx = self.setting.checkNextIndex(0, 'sell')
         if sell_idx == 0:
-            self.run_thread(0, 'sell')
-
+            buy_status = self.setting.getOrderStatus(0, 'buy')
+            if buy_status < 6:
+                self.run_thread(0, 'sell')
+    """
     # B1, S1 주문가 비교
     # B1의 주문가 가 S1의 주문가 보다 작으면 True
+    """
     def getB1S1PriceCompare(self):
         b1_price = self.setting.getOrderPrice(0, 'buy')
         s1_price = self.setting.getOrderPrice(0, 'sell')
@@ -480,7 +486,7 @@ class OrderTradeHTX:
                 if b1_price < s1_price:
                     return True
         return False
-
+    """
     # 자동 포지션 처리
     def autoPositionProcess(self):
         b1_price = self.setting.getOrderPrice(0, 'buy')
@@ -499,7 +505,7 @@ class OrderTradeHTX:
         if b_force:
             datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
             print(f"Auto Position Process : --{datetime}-- {self.symbol},  user={self.user_num}")
-            self.restartSymbolOrder(False, 1)
+            self.restartSymbolOrder(False, 0)
 
     def closeOpenThread(self):
         for i in range(0, 4):
@@ -511,6 +517,9 @@ class OrderTradeHTX:
                 self.setting.setStOrderStatus(i, 'complete', 'sell')
 
     def restartSymbolOrder(self, b_close, sleep_idx):
+        datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"restartSymbolOrder : --{datetime}-- user={self.user_num}, {self.symbol}, sleep_idx={sleep_idx}")
+
         self.onCloseSymbolOrder(b_close)
 
         self.sb_price = self.setting.symbol_price
@@ -528,7 +537,11 @@ class OrderTradeHTX:
         # sell, buy 방향의 모든 주문이 청산 완료 이면 새 주문 넣기
         sell_idx = self.setting.checkNextIndex(0, 'sell')
         if sell_idx == 0:
-            self.run_thread(0, 'sell')
+            b1_pos = self.setting.getOrderStatus(0, 'buy')
+            if b1_pos < 6:
+                self.run_thread(0, 'sell')
         buy_idx = self.setting.checkNextIndex(0, 'buy')
         if buy_idx == 0:
-            self.run_thread(0, 'buy')
+            s1_pos = self.setting.getOrderStatus(0, 'sell')
+            if s1_pos < 6:
+                self.run_thread(0, 'buy')
