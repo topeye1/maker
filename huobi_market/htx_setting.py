@@ -27,6 +27,7 @@ class HuobiSetting:
         self.BUY_MONEY = [0, 0, 0, 0, 0]
         self.SELL_NEXT = [0, 0, 0, 0, 0]
         self.BUY_NEXT = [0, 0, 0, 0, 0]
+        self.peak_max_price = 0
 
     def setStOrderStatus(self, idx, status, direction, price=0, tp=0, sl=0, amount=0, volume=0, money=0, order_id=''):
         if status == 'create':
@@ -101,6 +102,7 @@ class HuobiSetting:
         self.is_close = False
         self.max_price = 0
         self.min_price = 0
+        self.peak_max_price = 0
 
     # 다음 주문 상태 얻기
     def getNextStatus(self, idx, direction):
@@ -282,3 +284,16 @@ class HuobiSetting:
             elif direction == 'buy':
                 if self.BUY_ID[i] == order_id:
                     return i
+
+    def getOrderPriceStatus(self):
+        price = 0
+        side = ''
+        for i in range(0, 4):
+            if self.SELL_PRICE[i] > 0:
+                price = self.SELL_PRICE[i]
+                side = 'sell'
+        for i in range(0, 4):
+            if self.BUY_PRICE[i] > 0:
+                price = self.BUY_PRICE[i]
+                side = 'buy'
+        return price, side

@@ -38,6 +38,14 @@ class OrderTradeHTX:
         self.strengths = [float(w_param['m1']), float(w_param['m2']), float(w_param['m3']), float(w_param['m4'])]
         # 주문 수량
         self.orderCounts = [float(w_param['m12']), float(w_param['m13']), float(w_param['m14']), float(w_param['m15'])]
+        # Peak Order(Short Break) 확인 시간(분)
+        self.peak_time1 = int(w_param['m24']) * 60
+        # Peak Order(Short Break) 등락율(%)
+        self.peak_rate1 = float(w_param['m25']) / 100
+        # Peak Order(SB3, SB4) 확인 시간(분)
+        self.peak_time2 = int(w_param['m26']) * 60
+        # Peak Order(SB3, SB4) 등락율(%)
+        self.peak_rate2 = float(w_param['m27']) / 100
 
         # 급등,급락 판단을 위한 계산 주기(초)
         self.break_check_time = int(w_param['w3'])
@@ -59,6 +67,10 @@ class OrderTradeHTX:
         self.s_brake_restart_time = int(w_param['w11']) * 60
         # S-Break 선택 정보
         self.s_brake_sel = int(w_param['w12'])
+        # L-Break 재시작 시간(분)
+        self.l_brake_restart_time = int(w_param['w13']) * 60
+        # L-Break 선택 정보
+        self.l_brake_sel = int(w_param['w14'])
 
         self.l_stop_time = 0
         self.s_brake_time = 0
@@ -66,8 +78,6 @@ class OrderTradeHTX:
         self.s_brake_cnt = 0
         self.l_stop_cnt = 0
 
-        # S-Break 주문 선택
-        self.s_brake_sel_num = int(w_param['w11'])
         # Broker ID
         self.brokerID = w_param['brokerID']
         self.rdb = rdb
@@ -85,7 +95,14 @@ class OrderTradeHTX:
         self.stop_time = 0
         self.brake_time = 0
         self.c_time = 0
+        self.p_s_time = 0
         # self.is_service_start = False
+        self.sb_time = 0
+        self.b_sb3 = False
+        self.b_sb4 = False
+        self.sb3_max_price = 0
+        self.sb4_max_price = 0
+        self.new_order = False
 
     def del_run(self):
         for instance in self.live_instances:
@@ -183,10 +200,52 @@ class OrderTradeHTX:
                     works.append(work8)
                     self.c_time = 0
 
+                # S-Break 상태 이면서 재 시작 이면
+                if self.setting.peak_max_price > 0 and self.s_brake_sel > 1:
+                    if self.p_s_time < self.peak_time1 and self.new_order is False:
+                        self.p_s_time += self.schedule_period
+                        work9 = executor.submit(self.onPeakOrderShortBreak)
+                        works.append(work9)
+                    else:
+                        self.p_s_time = 0
+
+                # SB3, SB4 주문 이 포지션 된 상태
+                b_sb3 = self.onCheckOrderSB3()
+                b_sb4 = self.onCheckOrderSB4()
+                if b_sb3 != '':
+                    if self.b_sb3 is False:
+                        self.sb3_max_price = self.setting.symbol_price
+                        self.setting.peak_max_price = self.sb3_max_price
+                    if b_sb4 != '':
+                        if self.b_sb4 is False:
+                            self.sb_time = 0
+                            self.sb4_max_price = self.setting.symbol_price
+                            self.setting.peak_max_price = self.sb4_max_price
+                            self.b_sb4 = True
+                    else:
+                        self.b_sb4 = False
+                        self.setting.peak_max_price = self.sb3_max_price
+                    self.b_sb3 = True
+
+                    if self.sb_time < self.peak_time2:
+                        self.sb_time += self.schedule_period
+                        work10 = executor.submit(self.onPeakOrderSBreak34)
+                        works.append(work10)
+                    else:
+                        self.sb_time = 0
+                        self.sb3_max_price = 0
+                        self.sb4_max_price = 0
+                        self.b_sb3 = False
+                        self.b_sb4 = False
+                else:
+                    self.b_sb3 = False
+                    self.sb3_max_price = 0
+                    self.sb4_max_price = 0
+
                 # 정지된 주문 클래스 삭제
                 if len(self.live_instances) > 0:
-                    work9 = executor.submit(self.del_run_class)
-                    works.append(work9)
+                    work11 = executor.submit(self.del_run_class)
+                    works.append(work11)
 
                 concurrent.futures.wait(works)
                 executor.shutdown()
@@ -230,7 +289,10 @@ class OrderTradeHTX:
                 else:
                     connect_db.changeBreakStatus(self.user_num, self.symbol, 'htx', 3)
             else:
-                self.restartSymbolOrder(False, 2)
+                datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
+                print(f"--- {datetime} --- checkShortBreak : {self.symbol}, user={self.user_num}")
+                self.onCloseSymbolOrder(False)
+                self.setting.peak_max_price = self.setting.symbol_price
         if self.s_brake_cnt * self.break_check_time >= self.s_brake_base_time:
             self.sb_price = self.setting.symbol_price
             self.s_brake_cnt = 0
@@ -248,12 +310,17 @@ class OrderTradeHTX:
             return
         stop_rate = ((self.setting.max_price - self.setting.min_price) / self.setting.symbol_price) * 100
         if abs(stop_rate) >= self.l_stop_rate and self.setting.l_stop is False:
-            self.setting.l_stop = True
-            self.closeOpenThread()
-            if self.setting.s_brake:
-                connect_db.changeBreakStatus(self.user_num, self.symbol, 'htx', 4)
+            if self.l_brake_sel == 1:
+                self.setting.l_stop = True
+                self.closeOpenThread()
+                if self.setting.s_brake:
+                    connect_db.changeBreakStatus(self.user_num, self.symbol, 'htx', 4)
+                else:
+                    connect_db.changeBreakStatus(self.user_num, self.symbol, 'htx', 2)
             else:
-                connect_db.changeBreakStatus(self.user_num, self.symbol, 'htx', 2)
+                datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
+                print(f"--- {datetime} --- checkLongStop : {self.symbol}, user={self.user_num}")
+                self.restartSymbolOrder(False, 3)
         if self.l_stop_cnt * self.break_check_time >= self.l_stop_base_time:
             self.setting.max_price = 0
             self.setting.min_price = 0
@@ -273,8 +340,6 @@ class OrderTradeHTX:
                 break
         if is_cancel:
             self.is_all_close = True
-            self.stop_time = 0
-            self.brake_time = 0
             self.setting.is_close = True
             # self.is_service_start = False
 
@@ -283,7 +348,8 @@ class OrderTradeHTX:
                 if stop_htx[2] == self.symbol:
                     del utils.stop_htx_info[i]
                 i += 1
-
+            datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"--- {datetime} --- closeHuobiAllOrders")
             self.onCloseSymbolOrder(True)
             # 주문의 실행 상태 0 (stop 상태)
             connect_db.setCloseOrderStatus(self.symbol, self.user_num, 'htx')
@@ -307,17 +373,15 @@ class OrderTradeHTX:
         print(f"   {self.symbol}, sell_ids={sell_ids}")
         sell_close_id = cancel_order.onClosePositionOrder(self.user_num, self.symbol, 'sell', sell_ids)
         if str(sell_close_id) != '':
+            close_price = self.setting.symbol_price
             for i in range(0, len(sell_ids)):
                 idx = self.setting.getIDX('sell', sell_ids[i])
                 order_price = self.setting.getOrderPrice(idx, 'sell')
                 order_money = self.setting.getOrderMoney(idx, 'sell')
-                profit = utils.getRoundDotDigit((order_price - self.setting.symbol_price) / order_price * order_money,
-                                                self.dot_digit)
+                profit = utils.getRoundDotDigit((order_price - close_price) / order_price * order_money, self.dot_digit)
                 make_money = order_money + profit
-                self.swap_order.saveClosedOrderInfo(self.symbol, sell_ids[i], sell_close_id, self.setting.symbol_price,
-                                                    make_money, profit)
+                self.swap_order.saveClosedOrderInfo(self.symbol, sell_ids[i], sell_close_id, close_price, make_money, profit)
                 self.setting.setStOrderStatus(idx, 'complete', 'sell')
-                time.sleep(1)
         buy_ids = []
         for i in range(4, -1, -1):
             buy_id = self.setting.getOrderID(i, 'buy')
@@ -326,23 +390,32 @@ class OrderTradeHTX:
         print(f"   {self.symbol}, buy_ids={buy_ids}")
         buy_close_id = cancel_order.onClosePositionOrder(self.user_num, self.symbol, 'buy', buy_ids)
         if str(buy_close_id) != '':
+            close_price = self.setting.symbol_price
             for i in range(0, len(buy_ids)):
                 idx = self.setting.getIDX('buy', buy_ids[i])
                 order_price = self.setting.getOrderPrice(idx, 'buy')
                 order_money = self.setting.getOrderMoney(idx, 'buy')
-                profit = utils.getRoundDotDigit((self.setting.symbol_price - order_price) / order_price * order_money,
-                                                self.dot_digit)
+                profit = utils.getRoundDotDigit((close_price - order_price) / order_price * order_money, self.dot_digit)
                 make_money = order_money + profit
-                self.swap_order.saveClosedOrderInfo(self.symbol, buy_ids[i], buy_close_id, self.setting.symbol_price,
-                                                    make_money, profit)
+                self.swap_order.saveClosedOrderInfo(self.symbol, buy_ids[i], buy_close_id, close_price, make_money, profit)
                 self.setting.setStOrderStatus(idx, 'complete', 'buy')
-                time.sleep(1)
 
         if is_down:
             connect_db.setOrderClose(self.user_num, self.coin_num, 'htx', 0)
         else:
             connect_db.setOrderClose(self.user_num, self.coin_num, 'htx', 1)
         self.setting.initParams()
+        self.stop_time = 0
+        self.brake_time = 0
+        self.c_time = 0
+        self.p_s_time = 0
+        self.l_stop_time = 0
+        self.s_brake_time = 0
+        self.sb_price = 0
+        self.l_stop_cnt = 0
+        self.s_brake_cnt = 0
+        self.b_sb3 = False
+        self.b_sb4 = False
 
     # ['m19'](1시간) 시간 동안 체결이 일어 나지 않을 경우 주문 취소, 새 주문 넣기
     """
@@ -391,7 +464,7 @@ class OrderTradeHTX:
                 return
         time.sleep(self.schedule_period)
 
-    def run_thread(self, idx, direction, current_price=0):
+    def run_thread(self, idx, direction, current_price=0, immediate=False):
         status = self.setting.getOrderStatus(idx, direction)
         if status > 0:
             return
@@ -406,10 +479,10 @@ class OrderTradeHTX:
                 connect_db.setUsersAmount(self.user_num, 'htx', utils.getRoundDotDigit(float(balance), 2))
 
             if idx == 0:
-                one_thread = threading.Thread(target=self.start_thread, args=(idx, direction, balance, current_price))
+                one_thread = threading.Thread(target=self.start_thread, args=(idx, direction, balance, current_price, immediate))
                 one_thread.start()
             else:
-                tow_thread = threading.Thread(target=self.start_thread, args=(idx, direction, balance, current_price))
+                tow_thread = threading.Thread(target=self.start_thread, args=(idx, direction, balance, current_price, immediate))
                 tow_thread.daemon = True
                 tow_thread.start()
         except Exception as e:
@@ -417,7 +490,7 @@ class OrderTradeHTX:
             return
 
     # create trading order
-    def start_thread(self, idx, direction, balance, current_price):
+    def start_thread(self, idx, direction, balance, current_price, immediate):
         is_next = True
         if current_price == 0:
             if self.setting.symbol_price == 0:
@@ -438,10 +511,9 @@ class OrderTradeHTX:
                 price = current_price
         if price > 0:
             price = utils.getRoundDotDigit(price, self.dot_digit)
-
             self.live_run = htx_trading_run.RunTrading(self.api_key, self.secret_key, self.symbol, idx, direction,
                                                        self.param, self.w_param, self.rdb, price, self.swap_order,
-                                                       self.setting, self, self.user_num, self.auto_ctime, balance)
+                                                       self.setting, self, self.user_num, self.auto_ctime, balance, immediate)
             self.live_instances.append(self.live_run)
             self.c_time = 0
             # self.is_service_start = True
@@ -520,13 +592,8 @@ class OrderTradeHTX:
         datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
         print(f"restartSymbolOrder : --{datetime}-- user={self.user_num}, {self.symbol}, sleep_idx={sleep_idx}")
 
+        self.setting.is_close = True
         self.onCloseSymbolOrder(b_close)
-
-        self.sb_price = self.setting.symbol_price
-        self.s_brake_cnt = 0
-        self.s_brake_time = 0
-        self.l_stop_time = 0
-        self.l_stop_cnt = 0
 
         if sleep_idx == 0:
             time.sleep(self.order_one_reset_time)
@@ -534,6 +601,8 @@ class OrderTradeHTX:
             time.sleep(self.order_two_reset_time)
         elif sleep_idx == 2:
             time.sleep(self.s_brake_restart_time)
+        elif sleep_idx == 3:
+            time.sleep(self.l_brake_restart_time)
         # sell, buy 방향의 모든 주문이 청산 완료 이면 새 주문 넣기
         sell_idx = self.setting.checkNextIndex(0, 'sell')
         if sell_idx == 0:
@@ -545,3 +614,63 @@ class OrderTradeHTX:
             s1_pos = self.setting.getOrderStatus(0, 'sell')
             if s1_pos < 6:
                 self.run_thread(0, 'buy')
+
+    #
+    def onPeakOrderShortBreak(self):
+        if self.setting.peak_max_price == 0:
+            return
+        rate = (self.setting.symbol_price - self.setting.peak_max_price) / self.setting.peak_max_price
+        if abs(rate) >= self.peak_rate1:
+            side = 'sell'
+            if rate < 0:
+                side = 'sell'
+            elif rate > 0:
+                side = 'buy'
+            idx = self.setting.checkNextIndex(0, side)
+            if idx == 0:
+                self.new_order = True
+                self.setting.peak_max_price = 0
+                self.run_thread(idx, side, self.setting.symbol_price, True)
+
+    def onCheckOrderSB3(self):
+        side = ''
+        run = self.setting.getRunStatus(3, 'buy')
+        pos = self.setting.getOrderStatus(3, 'buy')
+        if run == 1 and pos == 6:
+            side = 'buy'
+        run = self.setting.getRunStatus(3, 'sell')
+        pos = self.setting.getOrderStatus(3, 'sell')
+        if run == 1 and pos == 6:
+            side = 'sell'
+        return side
+
+    def onCheckOrderSB4(self):
+        side = ''
+        run = self.setting.getRunStatus(4, 'buy')
+        pos = self.setting.getOrderStatus(4, 'buy')
+        if run == 1 and pos == 6:
+            side = 'buy'
+        run = self.setting.getRunStatus(4, 'sell')
+        pos = self.setting.getOrderStatus(4, 'sell')
+        if run == 1 and pos == 6:
+            side = 'sell'
+        return side
+
+    def onPeakOrderSBreak34(self):
+        if self.setting.peak_max_price == 0:
+            return
+        rate = (self.setting.symbol_price - self.setting.peak_max_price) / self.setting.peak_max_price
+
+        datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"--- {datetime} --- onPeakOrderSBreak34 {self.user_num} : {self.symbol}, rate={rate}, peak_rate2={self.peak_rate2}")
+
+        if abs(rate) >= self.peak_rate2:
+            side = 'sell'
+            if rate < 0:
+                side = 'sell'
+            elif rate > 0:
+                side = 'buy'
+            idx = self.setting.checkNextIndex(0, side)
+            if idx == 0:
+                self.setting.peak_max_price = 0
+                self.run_thread(idx, side, self.setting.symbol_price, True)

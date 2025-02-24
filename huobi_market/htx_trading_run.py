@@ -9,7 +9,7 @@ from huobi_market import htx_hoding_run, htx_order_info
 
 class RunTrading:
     def __init__(self, api_key, secret_key, symbol, idx, direction, param, w_param, rdb, price, swap_order, setting,
-                 tradingCls, user_num, auto_ctime, balance):
+                 tradingCls, user_num, auto_ctime, balance, immediate):
         self.idx = idx
         self.direction = direction
         self.api_key = api_key
@@ -65,6 +65,7 @@ class RunTrading:
         self.order_info = htx_order_info.HuobiOrderInfo(self.api_key, self.secret_key, self.symbol)
 
         self.class_status = 0
+        self.immediate = immediate
 
     def __del__(self):
         print(f"HTX - delete run : {self.symbol}-{self.direction} {self.idx}")
@@ -107,8 +108,8 @@ class RunTrading:
                     self.del_run()
                     return
 
-                # 30초 간격 으로 주문 청산 상태 확인
-                if self.checkOrderCnt >= 30:
+                # 10초 간격 으로 주문 청산 상태 확인
+                if self.checkOrderCnt >= 10:
                     work1 = executor.submit(self.checkTradeOrder)
                     works.append(work1)
                     self.checkOrderCnt = 0
@@ -124,17 +125,25 @@ class RunTrading:
                     self.cancel_time += self.scheduler_time
                 else:
                     self.cancel_time = 0
-
+                """
                 # Holding 상태 체크
                 if self.setting.holding_status is False:
                     if self.setting.s_brake or self.setting.l_stop:
                         work3 = executor.submit(self.checkHoldingStatus)
                         works.append(work3)
-
+                """
                 if run_status == 1 and pos_status < 6:
                     if self.is_position is False:
                         work4 = executor.submit(self.onOpenOrderPosition)
                         works.append(work4)
+
+                # 최대 청산 가격 얻기
+                if self.direction == 'sell':
+                    if self.setting.peak_max_price > self.setting.symbol_price:
+                        self.setting.peak_max_price = self.setting.symbol_price
+                elif self.direction == 'buy':
+                    if self.setting.peak_max_price < self.setting.symbol_price:
+                        self.setting.peak_max_price = self.setting.symbol_price
 
                 concurrent.futures.wait(works)
                 executor.shutdown()
@@ -177,13 +186,13 @@ class RunTrading:
         price = 0
         min_max_pro = self.getMinMaxPro(self.order_price)
         if self.direction == "sell":
-            if self.idx == 0:
+            if self.idx == 0 and self.immediate is False:
                 price = self.order_price - self.order_price * ((self.rate_liq + min_max_pro) / 100) * self.strengths[
                     self.idx]
             else:
                 price = self.order_price
         elif self.direction == "buy":
-            if self.idx == 0:
+            if self.idx == 0 and self.immediate is False:
                 price = self.order_price + self.order_price * ((self.rate_liq + min_max_pro) / 100) * self.strengths[
                     self.idx]
             else:
@@ -194,7 +203,7 @@ class RunTrading:
                                                                      price, self.rate_rev, self.rate_liq, self.brokerID)
         if state:
             datetime = utils.setTimezoneDateTime().strftime("%Y-%m-%d %H:%M:%S")
-            print(f"onOpenOrderPosition : --{datetime}-- user={self.user_num}, {self.symbol}-{self.direction} {self.idx},  order_id={order_id}")
+            print(f"      onOpenOrderPosition : --{datetime}-- user={self.user_num}, {self.symbol}-{self.direction} {self.idx},  order_id={order_id}")
             if self.idx == 0:
                 # 포지션 된 주문의 반대 방향은 주문 취소 한다
                 self.cancelReverseOrder()
@@ -206,6 +215,7 @@ class RunTrading:
             sl_price = 0
             rate_liq = self.rate_liq
             if self.idx > 0:
+                # B2 S2 이상의 주문 에서는 손실율 을 설정값 의 절반 값으로 설정
                 rate_liq = self.rate_liq / 2
 
             if self.direction == "sell":
@@ -230,7 +240,7 @@ class RunTrading:
             self.setting.setStOrderStatus(self.idx, 'complete', self.direction)
             self.run_reorder(self.idx, self.direction)
 
-    # 30초 간격 으로 해당 주문 체결이 완료 되었 는지 체크 하기
+    # 10초 간격 으로 해당 주문 체결이 완료 되었 는지 체크 하기
     def checkTradeOrder(self):
         pos_status = self.setting.getOrderStatus(self.idx, self.direction)
         if pos_status < 6:
@@ -246,6 +256,10 @@ class RunTrading:
         elif self.direction == 'sell':
             if self.setting.symbol_price >= sl:
                 b_complete = True
+
+        b_max_liq = self.onCheckLiquidationMaxPrice()
+        if b_max_liq:
+            b_complete = True
 
         if b_complete:
             # 주문 닫고 새 주문 넣기
@@ -313,7 +327,6 @@ class RunTrading:
 
     # 선 주문 취소
     def cancelFirstOrder(self):
-        print(f"cancelFirstOrder : {self.symbol}-{self.direction} {self.idx}")
         # self.sleep_time(self.idx)
         run = self.setting.getRunStatus(0, self.direction)
         pos = self.setting.getOrderStatus(0, self.direction)
@@ -432,4 +445,33 @@ class RunTrading:
         if self.next_price > 0:
             self.next_price = utils.getRoundDotDigit(self.next_price, self.dot_digit)
             return True
+        return False
+
+    # 최대 가격이 주문 가격의 1% 보다 크면서 하락 일 경우 최대 가격과 주문 가격의 차이의 50%에서 청산
+    # 최대 가격이 주문 가격의 1% 미만 이면 하락 일 경우 주문 가격 (혹은 현재 가격)으로 청산
+    def onCheckLiquidationMaxPrice(self):
+        pro = 0
+        max_pro = 1
+        liq_pro = 50
+        if self.setting.peak_max_price == 0:
+            return False
+        if self.direction == 'buy':
+            pro = ((self.setting.peak_max_price - self.order_price) / self.order_price) * 100
+        elif self.direction == 'sell':
+            pro = ((self.order_price - self.setting.peak_max_price) / self.setting.peak_max_price) * 100
+
+        if pro >= max_pro:
+            if self.direction == 'buy':
+                if self.setting.symbol_price < self.setting.peak_max_price:
+                    liq_price = self.setting.peak_max_price - ((self.setting.peak_max_price - self.order_price) / liq_pro) * 100
+                    if self.setting.symbol_price <= liq_price:
+                        print(f"   onCheckLiquidationMaxPrice : {self.symbol} {self.direction} {self.idx}")
+                        return True
+            elif self.direction == 'sell':
+                if self.setting.symbol_price > self.setting.peak_max_price:
+                    liq_price = self.order_price - ((self.order_price - self.setting.peak_max_price) / liq_pro) * 100
+                    if self.setting.symbol_price >= liq_price:
+                        print(f"   onCheckLiquidationMaxPrice : {self.symbol} {self.direction} {self.idx}")
+                        return True
+
         return False

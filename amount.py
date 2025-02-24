@@ -182,6 +182,8 @@ def getUserAmount():
         total_amount = 0
         if key['market'] == 'htx':
             account_type = getAccountType(key['api_key'], key['secret_key'])
+            if account_type is None:
+                continue
             if account_type > 0 and account_type == 1:
                 setAccountType(key['api_key'], key['secret_key'])
             total_amount = getHoubiFutureBalance(key['api_key'], key['secret_key'])
